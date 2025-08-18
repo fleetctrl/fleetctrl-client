@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p bin
-          go build -o ./bin/fleetctrl-client.exe ./cmd/main/
+          go build -o .\bin\fleetctrl-client.exe .\cmd\main\
 
       - name: Create Release
         id: create_release
