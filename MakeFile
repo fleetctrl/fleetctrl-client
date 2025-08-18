@@ -1,0 +1,11 @@
+# Simple Makefile for a Go project
+build:
+	@echo "Building..."
+	
+	
+	@go build -o bin/rustdesk-id-service.exe cmd/main/main.go
+
+
+# Run the application
+run:
+	@go run cmd/main/main.go
