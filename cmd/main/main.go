@@ -336,6 +336,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 	}
 
 	go ms.startRustDeskServerSync()
+	go ms.startRustDeskServerTasks()
 
 	// Označ službu jako běžící a přijímej Stop/Shutdown
 	changes <- svc.Status{
