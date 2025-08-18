@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version            = "0.2.1"
+	version            = "0.2.2-test"
 	production         = true
 	serviceName        = "fleetctrl-client"
 	serviceDisplayName = "fleetctrl client"
