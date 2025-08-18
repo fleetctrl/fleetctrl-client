@@ -232,11 +232,11 @@ func (ms *MainService) registerComputer() error {
 
 	if err != nil || key == "" {
 		// create registery key
-		_, err = CreateRegistryKey(registry.LOCAL_MACHINE, companyRegitryKey)
+		err = CreateRegistryKey(registry.LOCAL_MACHINE, companyRegitryKey)
 		if err != nil {
 			return fmt.Errorf("chyba při vytváření klíče v registru: %v", err)
 		}
-		_, err = CreateRegistryKey(registry.LOCAL_MACHINE, registeryRootKey)
+		err = CreateRegistryKey(registry.LOCAL_MACHINE, registeryRootKey)
 		if err != nil {
 			return fmt.Errorf("chyba při vytváření klíče v registru: %v", err)
 		}
@@ -443,11 +443,11 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// inicializovat registry
-	_, err = CreateRegistryKey(registry.LOCAL_MACHINE, companyRegitryKey)
+	err = CreateRegistryKey(registry.LOCAL_MACHINE, companyRegitryKey)
 	if err != nil {
 		log.Fatalf("chyba při inicializování registry: %v", err)
 	}
-	_, err = CreateRegistryKey(registry.LOCAL_MACHINE, registeryRootKey)
+	err = CreateRegistryKey(registry.LOCAL_MACHINE, registeryRootKey)
 	if err != nil {
 		log.Fatalf("chyba při inicializování registry: %v", err)
 	}
