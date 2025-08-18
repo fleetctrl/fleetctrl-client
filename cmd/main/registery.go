@@ -19,15 +19,16 @@ const (
 	RegistryBinary RegisteryType = "BINARY"
 )
 
-func CreateRegistryKey(registryType registry.Key, path string) (registry.Key, error) {
+func CreateRegistryKey(registryType registry.Key, path string) error {
 	var access uint32 = registry.ALL_ACCESS
 
 	key, _, err := registry.CreateKey(registryType, path, access)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create registry key: %w", err)
+		return fmt.Errorf("failed to create registry key: %w", err)
 	}
+	defer key.Close()
 
-	return key, nil
+	return nil
 }
 
 func SetRegisteryValue(registryType registry.Key, path string, name string, value RegistryValue) (registry.Key, error) {
