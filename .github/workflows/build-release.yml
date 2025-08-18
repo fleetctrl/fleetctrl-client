@@ -19,20 +19,24 @@ jobs:
         with:
           go-version: stable
 
-      - name: Extract version
+      - name: Extract version (PowerShell)
         id: extract_version
+        shell: pwsh
         run: |
-          VERSION=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' cmd/main/main.go)
-          if [ -z "$VERSION" ]; then
-            echo "Version not found" >&2
+          $pattern = '^\s*version\s*=\s*"([^"]+)"'
+          $match = Select-String -Path "cmd\main\main.go" -Pattern $pattern -Encoding UTF8
+          if (-not $match) {
+            Write-Error "Version not found in cmd\main\main.go"
             exit 1
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          }
+          $version = $match.Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build
+        shell: pwsh
         run: |
-          mkdir -p bin
-          go build -o .\bin\fleetctrl-client.exe .\cmd\main\
+          New-Item -ItemType Directory -Force -Path "bin" | Out-Null
+          go build -o ".\bin\fleetctrl-client.exe" ".\cmd\main\"
 
       - name: Create Release
         id: create_release
