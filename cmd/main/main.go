@@ -14,24 +14,9 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-<<<<<<< HEAD
-const (
-	version            = "0.2.2"
-	production         = true
-	serviceName        = "fleetctrl-client"
-	serviceDisplayName = "fleetctrl client"
-	targetDir          = `C:\Program Files\fleetctrl`
-	targetExeName      = "client.exe"
-	companyRegitryKey  = `SOFTWARE\WOW6432Node\fleetctrl`
-	registeryRootKey   = `SOFTWARE\WOW6432Node\fleetctrl\client`
-)
-
-type serviceHandler struct{}
-=======
 type serviceHandler struct {
 	ms *MainService
 }
->>>>>>> caad81c (feat: basic jwt + DPoP)
 
 type Task struct {
 	UUID      string          `json:"uuid"`
