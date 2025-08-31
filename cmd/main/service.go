@@ -1,6 +1,7 @@
 package main
 
 import (
+	consts "KiskaLE/RustDesk-ID/cmd/internal/const"
 	"fmt"
 	"log"
 	"os"
@@ -15,7 +16,7 @@ import (
 
 func RemoveService(serviceName string) error {
 	// Nastavení verzne na 0
-	key, err := SetRegisteryValue(registry.LOCAL_MACHINE, registeryRootKey, "version", RegistryValue{Type: RegistryString, Value: "0"})
+	key, err := SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "version", RegistryValue{Type: RegistryString, Value: "0"})
 	if err != nil {
 		log.Println("Chyba při nastavení verze: ", err)
 	}
@@ -24,7 +25,7 @@ func RemoveService(serviceName string) error {
 		key.Close()
 	}
 
-	key, err = SetRegisteryValue(registry.LOCAL_MACHINE, registeryRootKey, "anon_key", RegistryValue{Type: RegistryString, Value: "0"})
+	key, err = SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "anon_key", RegistryValue{Type: RegistryString, Value: "0"})
 	if err != nil {
 		log.Println("Chyba při odstranění klíce: ", err)
 	}
@@ -80,7 +81,7 @@ func RemoveService(serviceName string) error {
 
 	// Odstranění dat s retry logikou
 	for i := 0; i < 3; i++ {
-		err = TakeOwnershipAndDelete(targetDir)
+		err = TakeOwnershipAndDelete(consts.TargetDir)
 		if err == nil {
 			break
 		}
@@ -129,7 +130,7 @@ func InstallService(serviceName string, serviceDisplayName string) error {
 	}
 	defer m.Disconnect()
 
-	exePath := filepath.Join(targetDir, targetExeName)
+	exePath := filepath.Join(consts.TargetDir, consts.TargetExeName)
 
 	// zjistit jesli služba není zaregistrována
 	s, err := m.OpenService(serviceName)
@@ -199,12 +200,12 @@ func copyExecutable() error {
 	}
 
 	// Vytvořit cílový adresář
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	if err := os.MkdirAll(consts.TargetDir, 0755); err != nil {
 		return fmt.Errorf("chyba při vytváření adresáře: %v", err)
 	}
 
 	// Sestavit cílovou cestu
-	targetPath := filepath.Join(targetDir, targetExeName)
+	targetPath := filepath.Join(consts.TargetDir, consts.TargetExeName)
 
 	// Zkopírovat soubor
 	input, err := os.ReadFile(sourcePath)
