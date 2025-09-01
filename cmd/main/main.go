@@ -402,7 +402,7 @@ func main() {
 		// initialize supabase client
 		// for dev only
 
-		//go ms.startRustDeskServerSync()
+		go ms.startRustDeskServerSync()
 		go ms.startRustDeskServerTasks()
 		for {
 			time.Sleep(1 * time.Hour)
