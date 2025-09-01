@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"time"
 )
 
 func Put(url string, values map[string]string, key string) (*http.Response, error) {
@@ -21,7 +20,6 @@ func Put(url string, values map[string]string, key string) (*http.Response, erro
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("key", key) // Přidání vlastní hlavičky
 
-	http.DefaultClient.Timeout = time.Minute * 10
 	return http.DefaultClient.Do(req)
 }
 
@@ -40,7 +38,6 @@ func Post(url string, values map[string]string, headers map[string]string) (*htt
 		req.Header.Set(key, value)
 	}
 
-	http.DefaultClient.Timeout = time.Minute * 10
 	return http.DefaultClient.Do(req)
 }
 
@@ -54,7 +51,6 @@ func Get(url string, headers map[string]string) (*http.Response, error) {
 		req.Header.Set(key, value)
 	}
 
-	http.DefaultClient.Timeout = time.Minute * 10
 	return http.DefaultClient.Do(req)
 }
 
@@ -73,6 +69,5 @@ func Patch(url string, values map[string]string, headers map[string]string) (*ht
 		req.Header.Set(key, value)
 	}
 
-	http.DefaultClient.Timeout = time.Minute * 10
 	return http.DefaultClient.Do(req)
 }

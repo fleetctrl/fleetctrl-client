@@ -14,13 +14,12 @@ import (
 // AuthTransport is an http.RoundTripper that ensures Authorization and DPoP headers
 // are present and valid. It refreshes tokens when close to expiry and retries once on 401.
 type AuthTransport struct {
-	Base      http.RoundTripper
-	Tokens    *Tokens
-	AS        *AuthService
-	OnRefresh func(Tokens)
+    Base      http.RoundTripper
+    Tokens    *Tokens
+    AS        *AuthService
+    OnRefresh func(Tokens)
 
-	mu   sync.Mutex
-	skew time.Duration
+    mu   sync.Mutex
 }
 
 // InitHTTPClient configures http.DefaultClient to use AuthTransport.
@@ -35,6 +34,8 @@ func InitHTTPClient(as *AuthService, tokens *Tokens, onRefresh func(Tokens)) {
 		OnRefresh: onRefresh,
 	}
 	http.DefaultClient.Transport = tr
+	// Set a single global timeout to avoid per-call races
+	http.DefaultClient.Timeout = 10 * time.Minute
 }
 
 func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -134,31 +135,39 @@ func (t *AuthTransport) waitForServerOnline(ctx context.Context) error {
 }
 
 func (t *AuthTransport) currentTokens() (access, refresh string) {
-	// No lock needed: we only read simple fields; refreshLocked protects updates
-	if t.Tokens == nil {
-		return "", ""
-	}
-	return t.Tokens.AccessToken, t.Tokens.RefreshToken
+    t.mu.Lock()
+    defer t.mu.Unlock()
+    if t.Tokens == nil {
+        return "", ""
+    }
+    return t.Tokens.AccessToken, t.Tokens.RefreshToken
 }
 
 func (t *AuthTransport) refreshLocked(refreshToken string) error {
-	if t.AS == nil || t.Tokens == nil {
-		return errors.New("auth transport not initialized")
-	}
+    if t.AS == nil || t.Tokens == nil {
+        return errors.New("auth transport not initialized")
+    }
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
+    // Read the latest refresh token under lock
+    t.mu.Lock()
+    rt := t.Tokens.RefreshToken
+    t.mu.Unlock()
 
-	nt, err := t.AS.RefreshTokens(refreshToken)
-	if err != nil {
-		return err
-	}
-	t.Tokens.AccessToken = nt.AccessToken
-	t.Tokens.RefreshToken = nt.RefreshToken
-	if t.OnRefresh != nil {
-		t.OnRefresh(nt)
-	}
-	return nil
+    nt, err := t.AS.RefreshTokens(rt)
+    if err != nil {
+        return err
+    }
+    // Update tokens under lock and copy callback
+    t.mu.Lock()
+    t.Tokens.AccessToken = nt.AccessToken
+    t.Tokens.RefreshToken = nt.RefreshToken
+    cb := t.OnRefresh
+    t.mu.Unlock()
+    // Invoke callback outside the lock
+    if cb != nil {
+        cb(nt)
+    }
+    return nil
 }
 
 func setAuthHeaders(req *http.Request, accessToken string) {
