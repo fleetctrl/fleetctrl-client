@@ -55,7 +55,7 @@ func LoadEnv() {
 }
 
 func Ping(host string) (bool, error) {
-	res, err := Get(host + "/health")
+	res, err := Get(host+"/health", map[string]string{})
 	if err != nil {
 		return false, err
 	}

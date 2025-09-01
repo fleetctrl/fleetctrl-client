@@ -112,7 +112,9 @@ func (as *AuthService) IsEnrolled() (bool, error) {
 			return false, err
 		}
 	}
-	res, err := utils.Get(as.serverUrl + "/enroll/" + fingerprint + "/is-enrolled")
+	res, err := utils.Get(as.serverUrl+"/enroll/"+fingerprint+"/is-enrolled", map[string]string{
+		"Content-Type": "application/json",
+	})
 	if err != nil {
 		return false, err
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"time"
 
 	"golang.org/x/sys/windows/registry"
@@ -19,11 +20,11 @@ type serviceHandler struct {
 }
 
 type Task struct {
-	UUID      string          `json:"uuid"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID        string          `json:"id"`
 	Status    string          `json:"status"`
 	Task      string          `json:"task"`
 	TaskData  json.RawMessage `json:"task_data"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 type SetPasswordTask struct {
@@ -147,78 +148,117 @@ func (ms *MainService) startRustDeskServerSync() {
 	}
 }
 
-// func (ms *MainService) startRustDeskServerTasks() {
-// 	log.Println("Starting tasks...")
-// 	for {
-// 		ping, err := utils.Ping(ms.serverUrl)
-// 		if err != nil {
-// 			log.Printf("error pinging server: %v", err)
-// 		}
-// 		if !ping {
-// 			log.Println("Server is not reachable. Waiting 15 minutes...")
-// 			time.Sleep(15 * time.Minute)
-// 			continue
-// 		}
+func (ms *MainService) startRustDeskServerTasks() {
+	log.Println("Starting tasks...")
+	for {
+		type TaskResponse struct {
+			Tasks []Task `json:"tasks"`
+		}
 
-// 		rustdeskID, err := utils.GetRustDeskID()
-// 		if err != nil {
-// 			log.Println(err)
-// 			time.Sleep(15 * time.Minute)
-// 			continue
-// 		}
+		dpop, err := auth.CreateDPoP(consts.ServerUrl+"/tasks", ms.tokens.AccessToken)
+		if err != nil {
+			log.Println(err)
+			time.Sleep(15 * time.Minute)
+			continue
+		}
 
-// 		key, err := GetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "key")
-// 		if err != nil {
-// 			log.Println("Neexistuje key pro autentikaci pc")
-// 			time.Sleep(15 * time.Minute)
-// 			continue
-// 		}
+		// get tasks
+		tasksRes, err := utils.Get(consts.ServerUrl+"/tasks", map[string]string{
+			"Authorization": "Bearer " + ms.tokens.AccessToken,
+			"Content-Type":  "application/json",
+			"DPoP":          dpop,
+		})
+		if err != nil {
+			log.Println(err)
+			time.Sleep(5 * time.Minute)
+			continue
+		}
+		if tasksRes.StatusCode != 200 {
+			// parse body
+			log.Println("Server returned error: ", utils.ParseHttpError(tasksRes))
+			time.Sleep(5 * time.Minute)
+			continue
+		}
 
-// 		// get task from supabase
-// 		tasksData := ms.client.Rpc("get_tasks_by_rustdesk_id", "", map[string]any{
-// 			"in_rustdesk_id": rustdeskID,
-// 			"in_key":         key,
-// 		})
-// 		var tasks []Task
-// 		if err := json.Unmarshal([]byte(tasksData), &tasks); err != nil {
-// 			log.Println(err)
-// 		}
+		var data TaskResponse
+		if err := json.NewDecoder(tasksRes.Body).Decode(&data); err != nil {
+			log.Println(err)
+			time.Sleep(5 * time.Minute)
+			continue
+		}
+		tasks := data.Tasks
 
-// 		for i := 0; i < len(tasks); i++ {
-// 			task := tasks[i]
-// 			switch task.Task {
-// 			case "SET_PASSWD":
-// 				var d SetPasswordTask
-// 				if err := json.Unmarshal(task.TaskData, &d); err != nil {
-// 					log.Println(err)
-// 				}
+		for i := 0; i < len(tasks); i++ {
+			task := tasks[i]
+			// set task started
+			dpop, err = auth.CreateDPoP(consts.ServerUrl+"/task/"+task.ID, ms.tokens.AccessToken)
+			if err != nil {
+				log.Println(err)
+				time.Sleep(15 * time.Minute)
+				continue
+			}
+			utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
+				"status": "IN_PROGRESS",
+				"error":  "",
+			}, map[string]string{
+				"Authorization": "Bearer " + ms.tokens.AccessToken,
+				"Content-Type":  "application/json",
+				"DPoP":          dpop,
+			})
+			switch task.Task {
+			case "SET_PASSWD":
+				var d SetPasswordTask
+				if err := json.Unmarshal(task.TaskData, &d); err != nil {
+					log.Println(err)
+				}
 
-// 				// set passwor using powershell
-// 				cmd := exec.Command("powershell", "-Command", "& 'C:\\Program Files\\RustDesk\\RustDesk.exe' --password "+d.Password)
-// 				cmd.Stdout = os.Stdout
-// 				cmd.Stderr = os.Stderr
-// 				err := cmd.Run()
-// 				if err != nil {
-// 					log.Println(err)
-// 					ms.client.Rpc("set_task_error", "", map[string]any{
-// 						"in_uuid":  task.UUID,
-// 						"in_error": err.Error(),
-// 					})
-// 					break
-// 				}
-// 				log.Println("Password set")
+				// set passwor using powershell
+				cmd := exec.Command("powershell", "-Command", "& 'C:\\Program Files\\RustDesk\\RustDesk.exe' --password "+d.Password)
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				err := cmd.Run()
+				if err != nil {
+					log.Println(err)
+					dpop, err = auth.CreateDPoP(consts.ServerUrl+"/task/"+task.ID, ms.tokens.AccessToken)
+					if err != nil {
+						log.Println(err)
+						time.Sleep(15 * time.Minute)
+						continue
+					}
+					utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
+						"status": "ERROR",
+						"error":  err.Error(),
+					}, map[string]string{
+						"Authorization": "Bearer " + ms.tokens.AccessToken,
+						"Content-Type":  "application/json",
+						"DPoP":          dpop,
+					})
+					break
+				}
+				log.Println("Password set")
 
-// 				ms.client.Rpc("edit_task_status", "", map[string]any{
-// 					"in_uuid":       task.UUID,
-// 					"in_new_status": "SUCCESS",
-// 				})
+				dpop, err = auth.CreateDPoP(consts.ServerUrl+"/task/"+task.ID, ms.tokens.AccessToken)
+				if err != nil {
+					log.Println(err)
+					time.Sleep(15 * time.Minute)
+					continue
+				}
 
-// 			}
-// 		}
+				utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
+					"status": "SUCCESS",
+					"error":  "",
+				}, map[string]string{
+					"Authorization": "Bearer " + ms.tokens.AccessToken,
+					"Content-Type":  "application/json",
+					"DPoP":          dpop,
+				})
 
-// 		time.Sleep(5 * time.Minute)
-// 	}
-// }
+			}
+		}
+
+		time.Sleep(5 * time.Minute)
+	}
+}
 
 func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	serverURL, err := GetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url")
@@ -411,15 +451,15 @@ func main() {
 		// initialize supabase client
 		// for dev only
 
-		go ms.startRustDeskServerSync()
-		//go ms.startRustDeskServerTasks()
+		//go ms.startRustDeskServerSync()
+		go ms.startRustDeskServerTasks()
 		for {
 			time.Sleep(1 * time.Hour)
 		}
 	}
 
 	go ms.startRustDeskServerSync()
-	//go ms.startRustDeskServerTasks()
+	go ms.startRustDeskServerTasks()
 
 	if err := svc.Run(consts.ServiceName, &serviceHandler{}); err != nil {
 		log.Fatalf("chyba služby: %v", err)

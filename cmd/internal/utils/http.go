@@ -58,10 +58,14 @@ func Post(url string, values map[string]string, headers map[string]string) (*htt
 	return client.Do(req)
 }
 
-func Get(url string) (*http.Response, error) {
+func Get(url string, headers map[string]string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 
 	// Vytvoření http.Client s vypnutou kontrolou certifikátu
