@@ -44,19 +44,6 @@ func NewMainService(serverUrl string, as *auth.AuthService) *MainService {
 func (ms *MainService) startRustDeskServerSync() {
 	fmt.Println("Starting RustDesk sync...")
 	for {
-		// check connection to server
-		ping, err := utils.Ping(ms.serverUrl)
-		if err != nil {
-			log.Printf("chyba při kontrole připojení k serveru: %v", err)
-			time.Sleep(15 * time.Minute)
-			continue
-		}
-		if !ping {
-			log.Println("Server není dostupný. Čekám 15 minut na další pokus...")
-			time.Sleep(15 * time.Minute)
-			continue
-		}
-
 		// get rustdesk ID
 		rustdeskID, err := utils.GetRustDeskID()
 		if err != nil {
@@ -112,13 +99,6 @@ func (ms *MainService) startRustDeskServerSync() {
 			LastConnection: time.Now().Format(time.RFC3339),
 		}
 
-		dpop, err := auth.CreateDPoP(consts.ServerUrl+"/computer/rustdesk-sync", ms.tokens.AccessToken)
-		if err != nil {
-			log.Println(err)
-			time.Sleep(15 * time.Minute)
-			continue
-		}
-
 		res, err := utils.Patch(consts.ServerUrl+"/computer/rustdesk-sync", map[string]string{
 			"name":            computer.Name,
 			"rustdesk_id":     computer.RustdeskID,
@@ -128,9 +108,7 @@ func (ms *MainService) startRustDeskServerSync() {
 			"login_user":      computer.LoginUser,
 			"last_connection": computer.LastConnection,
 		}, map[string]string{
-			"Authorization": "Bearer " + ms.tokens.AccessToken,
-			"Content-Type":  "application/json",
-			"DPoP":          dpop,
+			"Content-Type": "application/json",
 		})
 		if err != nil {
 			log.Println(err)
@@ -155,18 +133,9 @@ func (ms *MainService) startRustDeskServerTasks() {
 			Tasks []Task `json:"tasks"`
 		}
 
-		dpop, err := auth.CreateDPoP(consts.ServerUrl+"/tasks", ms.tokens.AccessToken)
-		if err != nil {
-			log.Println(err)
-			time.Sleep(15 * time.Minute)
-			continue
-		}
-
 		// get tasks
 		tasksRes, err := utils.Get(consts.ServerUrl+"/tasks", map[string]string{
-			"Authorization": "Bearer " + ms.tokens.AccessToken,
-			"Content-Type":  "application/json",
-			"DPoP":          dpop,
+			"Content-Type": "application/json",
 		})
 		if err != nil {
 			log.Println(err)
@@ -191,19 +160,11 @@ func (ms *MainService) startRustDeskServerTasks() {
 		for i := 0; i < len(tasks); i++ {
 			task := tasks[i]
 			// set task started
-			dpop, err = auth.CreateDPoP(consts.ServerUrl+"/task/"+task.ID, ms.tokens.AccessToken)
-			if err != nil {
-				log.Println(err)
-				time.Sleep(15 * time.Minute)
-				continue
-			}
 			utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
 				"status": "IN_PROGRESS",
 				"error":  "",
 			}, map[string]string{
-				"Authorization": "Bearer " + ms.tokens.AccessToken,
-				"Content-Type":  "application/json",
-				"DPoP":          dpop,
+				"Content-Type": "application/json",
 			})
 			switch task.Task {
 			case "SET_PASSWD":
@@ -219,38 +180,21 @@ func (ms *MainService) startRustDeskServerTasks() {
 				err := cmd.Run()
 				if err != nil {
 					log.Println(err)
-					dpop, err = auth.CreateDPoP(consts.ServerUrl+"/task/"+task.ID, ms.tokens.AccessToken)
-					if err != nil {
-						log.Println(err)
-						time.Sleep(15 * time.Minute)
-						continue
-					}
 					utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
 						"status": "ERROR",
 						"error":  err.Error(),
 					}, map[string]string{
-						"Authorization": "Bearer " + ms.tokens.AccessToken,
-						"Content-Type":  "application/json",
-						"DPoP":          dpop,
+						"Content-Type": "application/json",
 					})
 					break
 				}
 				log.Println("Password set")
 
-				dpop, err = auth.CreateDPoP(consts.ServerUrl+"/task/"+task.ID, ms.tokens.AccessToken)
-				if err != nil {
-					log.Println(err)
-					time.Sleep(15 * time.Minute)
-					continue
-				}
-
 				utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
 					"status": "SUCCESS",
 					"error":  "",
 				}, map[string]string{
-					"Authorization": "Bearer " + ms.tokens.AccessToken,
-					"Content-Type":  "application/json",
-					"DPoP":          dpop,
+					"Content-Type": "application/json",
 				})
 
 			}
@@ -446,6 +390,13 @@ func main() {
 		}
 	}
 	ms.tokens = &tokens
+
+	// Initialize HTTP client with auth middleware (Bearer + DPoP with auto-refresh)
+	auth.InitHTTPClient(ms.as, ms.tokens, func(nt auth.Tokens) {
+		if err := auth.SaveRefershToken(nt.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+			log.Println("chyba při ukládání refresh tokenu po obnově:", err)
+		}
+	})
 
 	if !consts.Production {
 		// initialize supabase client

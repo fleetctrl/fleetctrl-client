@@ -2,7 +2,6 @@ package utils
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -22,16 +21,8 @@ func Put(url string, values map[string]string, key string) (*http.Response, erro
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("key", key) // Přidání vlastní hlavičky
 
-	// Vytvoření http.Client s vypnutou kontrolou certifikátu
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-
-	client := &http.Client{
-		Timeout:   time.Minute * 10,
-		Transport: tr,
-	}
-	return client.Do(req)
+	http.DefaultClient.Timeout = time.Minute * 10
+	return http.DefaultClient.Do(req)
 }
 
 func Post(url string, values map[string]string, headers map[string]string) (*http.Response, error) {
@@ -49,13 +40,8 @@ func Post(url string, values map[string]string, headers map[string]string) (*htt
 		req.Header.Set(key, value)
 	}
 
-	tr := &http.Transport{}
-
-	client := &http.Client{
-		Timeout:   time.Minute * 10,
-		Transport: tr,
-	}
-	return client.Do(req)
+	http.DefaultClient.Timeout = time.Minute * 10
+	return http.DefaultClient.Do(req)
 }
 
 func Get(url string, headers map[string]string) (*http.Response, error) {
@@ -68,16 +54,8 @@ func Get(url string, headers map[string]string) (*http.Response, error) {
 		req.Header.Set(key, value)
 	}
 
-	// Vytvoření http.Client s vypnutou kontrolou certifikátu
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-
-	client := &http.Client{
-		Timeout:   time.Minute * 10,
-		Transport: tr,
-	}
-	return client.Do(req)
+	http.DefaultClient.Timeout = time.Minute * 10
+	return http.DefaultClient.Do(req)
 }
 
 func Patch(url string, values map[string]string, headers map[string]string) (*http.Response, error) {
@@ -95,11 +73,6 @@ func Patch(url string, values map[string]string, headers map[string]string) (*ht
 		req.Header.Set(key, value)
 	}
 
-	tr := &http.Transport{}
-
-	client := &http.Client{
-		Timeout:   time.Minute * 10,
-		Transport: tr,
-	}
-	return client.Do(req)
+	http.DefaultClient.Timeout = time.Minute * 10
+	return http.DefaultClient.Do(req)
 }
