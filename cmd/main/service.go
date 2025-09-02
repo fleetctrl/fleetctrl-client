@@ -25,15 +25,6 @@ func RemoveService(serviceName string) error {
 		key.Close()
 	}
 
-	key, err = SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "anon_key", RegistryValue{Type: RegistryString, Value: "0"})
-	if err != nil {
-		log.Println("Chyba při odstranění klíce: ", err)
-	}
-
-	if key != registry.Key(0) {
-		key.Close()
-	}
-
 	m, err := mgr.Connect()
 	if err != nil {
 		log.Printf("Chyba při připojení ke správci služeb: %v", err)
@@ -153,8 +144,6 @@ func InstallService(serviceName string, serviceDisplayName string) error {
 		return nil
 	}
 
-	// služba neexistuje
-
 	// Vytvoření služby a získání handleru
 	s, err = m.CreateService(
 		serviceName,
@@ -162,7 +151,7 @@ func InstallService(serviceName string, serviceDisplayName string) error {
 		mgr.Config{
 			DisplayName:      serviceDisplayName,
 			StartType:        mgr.StartAutomatic,
-			ServiceStartName: "LocalSystem", // Explicitně nastavit account
+			ServiceStartName: "LocalSystem",
 		},
 	)
 
