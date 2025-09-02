@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -14,12 +15,15 @@ import (
 // AuthTransport is an http.RoundTripper that ensures Authorization and DPoP headers
 // are present and valid. It refreshes tokens when close to expiry and retries once on 401.
 type AuthTransport struct {
-    Base      http.RoundTripper
-    Tokens    *Tokens
-    AS        *AuthService
-    OnRefresh func(Tokens)
+	Base      http.RoundTripper
+	Tokens    *Tokens
+	AS        *AuthService
+	OnRefresh func(Tokens)
 
-    mu   sync.Mutex
+	mu sync.Mutex
+
+	// local_time - server_time; used to adjust DPoP iat
+	serverSkew time.Duration
 }
 
 // InitHTTPClient configures http.DefaultClient to use AuthTransport.
@@ -54,7 +58,7 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Build request copy with auth headers
 	req1 := cloneRequest(req)
-	setAuthHeaders(req1, at)
+	t.setAuthHeaders(req1, at)
 
 	res, err := base.RoundTrip(req1)
 	if err != nil {
@@ -66,7 +70,7 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 					reqRetry.Body = b
 				}
 			}
-			setAuthHeaders(reqRetry, at)
+			t.setAuthHeaders(reqRetry, at)
 			return base.RoundTrip(reqRetry)
 		}
 		return res, err
@@ -86,7 +90,10 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	drainAndClose(res.Body)
 
 	if err := t.refreshLocked(rt); err != nil {
-		return nil, err
+		// If refresh failed, try recover flow once
+		if rerr := t.RecoverLocked(req.Context()); rerr != nil {
+			return nil, err
+		}
 	}
 
 	// Retry with fresh token
@@ -97,7 +104,7 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		b, _ := req.GetBody()
 		req2.Body = b
 	}
-	setAuthHeaders(req2, at)
+	t.setAuthHeaders(req2, at)
 	return base.RoundTrip(req2)
 }
 
@@ -118,6 +125,15 @@ func (t *AuthTransport) waitForServerOnline(ctx context.Context) error {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 		if resp, err := client.Do(req); err == nil {
 			if resp.StatusCode == http.StatusOK {
+				// capture server time skew if Date header is present
+				if date := resp.Header.Get("Date"); date != "" {
+					if srvTime, perr := http.ParseTime(date); perr == nil {
+						skew := time.Since(srvTime)
+						t.mu.Lock()
+						t.serverSkew = skew
+						t.mu.Unlock()
+					}
+				}
 				drainAndClose(resp.Body)
 				return nil
 			}
@@ -135,47 +151,98 @@ func (t *AuthTransport) waitForServerOnline(ctx context.Context) error {
 }
 
 func (t *AuthTransport) currentTokens() (access, refresh string) {
-    t.mu.Lock()
-    defer t.mu.Unlock()
-    if t.Tokens == nil {
-        return "", ""
-    }
-    return t.Tokens.AccessToken, t.Tokens.RefreshToken
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.Tokens == nil {
+		return "", ""
+	}
+	return t.Tokens.AccessToken, t.Tokens.RefreshToken
 }
 
 func (t *AuthTransport) refreshLocked(refreshToken string) error {
-    if t.AS == nil || t.Tokens == nil {
-        return errors.New("auth transport not initialized")
-    }
+	if t.AS == nil || t.Tokens == nil {
+		return errors.New("auth transport not initialized")
+	}
 
-    // Read the latest refresh token under lock
-    t.mu.Lock()
-    rt := t.Tokens.RefreshToken
-    t.mu.Unlock()
+	// Read the latest refresh token under lock
+	t.mu.Lock()
+	rt := t.Tokens.RefreshToken
+	t.mu.Unlock()
 
-    nt, err := t.AS.RefreshTokens(rt)
-    if err != nil {
-        return err
-    }
-    // Update tokens under lock and copy callback
-    t.mu.Lock()
-    t.Tokens.AccessToken = nt.AccessToken
-    t.Tokens.RefreshToken = nt.RefreshToken
-    cb := t.OnRefresh
-    t.mu.Unlock()
-    // Invoke callback outside the lock
-    if cb != nil {
-        cb(nt)
-    }
-    return nil
+	nt, err := t.AS.RefreshTokens(rt)
+	if err != nil {
+		return err
+	}
+	// Update tokens under lock and copy callback
+	t.mu.Lock()
+	t.Tokens.AccessToken = nt.AccessToken
+	t.Tokens.RefreshToken = nt.RefreshToken
+	cb := t.OnRefresh
+	t.mu.Unlock()
+	// Invoke callback outside the lock
+	if cb != nil {
+		cb(nt)
+	}
+	return nil
 }
 
-func setAuthHeaders(req *http.Request, accessToken string) {
+// recoverLocked calls the /token/recover endpoint with DPoP proof to obtain fresh tokens.
+func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
+	if t.AS == nil || t.Tokens == nil {
+		return errors.New("auth transport not initialized")
+	}
+
+	// Construct recover request (POST, empty body) with DPoP only
+	recoverURL := t.AS.serverUrl + "/token/recover"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, recoverURL, nil)
+	if err != nil {
+		return err
+	}
+	// Use server skew to avoid stale proofs
+	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
+	iat := time.Now().Add(-skew)
+	if dpop, derr := CreateDPoPAt(http.MethodPost, recoverURL, "", iat); derr == nil {
+		req.Header.Set("DPoP", dpop)
+	}
+
+	client := &http.Client{Transport: t.Base, Timeout: 30 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer drainAndClose(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return errors.New("POST chyba pri obnoveni tokenu pres recover")
+	}
+
+	var payload struct {
+		Tokens Tokens `json:"tokens"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return err
+	}
+
+	// Update tokens and notify callback
+	t.mu.Lock()
+	t.Tokens.AccessToken = payload.Tokens.AccessToken
+	t.Tokens.RefreshToken = payload.Tokens.RefreshToken
+	cb := t.OnRefresh
+	t.mu.Unlock()
+	if cb != nil {
+		cb(payload.Tokens)
+	}
+	return nil
+}
+
+func (t *AuthTransport) setAuthHeaders(req *http.Request, accessToken string) {
 	if accessToken == "" {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	if dpop, err := CreateDPoP(req.URL.String(), accessToken); err == nil {
+	// Adjust iat by observed server skew
+	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
+	iat := time.Now().Add(-skew)
+	if dpop, err := CreateDPoPAt(req.Method, req.URL.String(), accessToken, iat); err == nil {
 		req.Header.Set("DPoP", dpop)
 	}
 }

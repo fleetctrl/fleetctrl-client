@@ -233,7 +233,19 @@ func SaveRefershToken(refreshToken string, path string, fileName string) error {
 	return os.WriteFile(path+"/"+fileName, []byte(enc), 0600)
 }
 
+// CreateDPoP builds a DPoP proof for the given address using the current time and method GET.
+// Prefer CreateDPoPWithMethod or CreateDPoPAt from new code paths.
 func CreateDPoP(adress string, accessToken string) (string, error) {
+    return CreateDPoPWithMethod("GET", adress, accessToken)
+}
+
+// CreateDPoPWithMethod builds a DPoP proof for the given HTTP method and address using the current time.
+func CreateDPoPWithMethod(method string, adress string, accessToken string) (string, error) {
+    return CreateDPoPAt(method, adress, accessToken, time.Now())
+}
+
+// CreateDPoPAt builds a DPoP proof with an explicit iat timestamp.
+func CreateDPoPAt(method string, adress string, accessToken string, iat time.Time) (string, error) {
 	// Load private key generated during enroll
 	priv, err := loadPrivJWK(consts.ProgramDataDir+"/certs", "priv.jwk")
 	if err != nil {
@@ -260,13 +272,13 @@ func CreateDPoP(adress string, accessToken string) (string, error) {
 		sum := sha256.Sum256([]byte(accessToken))
 		ath = base64.RawURLEncoding.EncodeToString(sum[:])
 	}
-	// Claims per RFC9449
-	claims := jwt.MapClaims{
-		"htm": strings.ToUpper("HS256"),
-		"htu": adress,
-		"iat": time.Now().Unix(),
-		"jti": uuid.NewString(),
-	}
+    // Claims per RFC9449
+    claims := jwt.MapClaims{
+        "htm": strings.ToUpper(method),
+        "htu": adress,
+        "iat": iat.Unix(),
+        "jti": uuid.NewString(),
+    }
 	if ath != "" {
 		claims["ath"] = ath
 	}

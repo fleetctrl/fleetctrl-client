@@ -369,25 +369,6 @@ func main() {
 			log.Fatalln("chyba při ukládání klíče: ", err)
 			return
 		}
-	} else {
-		// load refresh token
-		refreshToken, err := auth.LoadRefreshToken(consts.ProgramDataDir+"/tokens", "refresh_token.txt")
-		if err != nil {
-			log.Fatalln("chyba při získávání klíče: ", err)
-			return
-		}
-		// request new access token from server
-		tokens, err = ms.as.RefreshTokens(refreshToken)
-		if err != nil {
-			log.Fatalf("chyba při aktualizování tokenu: %v", err)
-			return
-		}
-		// save refresh token
-		err = auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt")
-		if err != nil {
-			log.Fatalln("chyba při ukládání klíče: ", err)
-			return
-		}
 	}
 	ms.tokens = &tokens
 
