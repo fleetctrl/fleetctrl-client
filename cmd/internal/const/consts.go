@@ -2,7 +2,7 @@ package consts
 
 const (
 	Version            = "0.2.1"
-	Production         = false
+	Production         = true
 	ServiceName        = "fleetctrl-client"
 	ServiceDisplayName = "fleetctrl client"
 	TargetDir          = `C:\Program Files\fleetctrl`

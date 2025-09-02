@@ -205,11 +205,6 @@ func (ms *MainService) startRustDeskServerTasks() {
 }
 
 func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	serverURL, err := GetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url")
-	if err != nil {
-		log.Fatalln("chyba při získávání klíča z registru: ", err)
-	}
-
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop}
 
 	// Označ službu jako běžící a přijímej Stop/Shutdown
@@ -220,6 +215,11 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+
+	serverURL, err := GetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url")
+	if err != nil {
+		log.Fatalln("chyba při získávání klíča z registru: ", err)
+	}
 
 	for {
 		ok, err := utils.Ping(serverURL)
@@ -240,6 +240,42 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 		case <-time.After(5 * time.Second): // místo 5 minut; klidně exponenciální backoff
 		}
 	}
+
+	// check if computer is enrolled
+
+	as := auth.NewAuthService(serverURL)
+	ms := NewMainService(serverURL, as)
+
+	// check if computer is registered
+	registered, err := ms.as.IsEnrolled()
+	if err != nil {
+		log.Fatalf("chyba při kontrole registrace: %v", err)
+	}
+
+	fmt.Println("Zda je počítač zaregistrován: ", registered)
+	var tokens auth.Tokens
+	if !registered {
+		log.Println("Tento počítač není zaregistrován na serveru. Registruji...")
+		tokens, err = ms.as.Enroll()
+		if err != nil {
+			log.Fatalf("chyba při registraci počítače: %v", err)
+		}
+		err = auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt")
+		if err != nil {
+			log.Fatalln("chyba při ukládání klíče: ", err)
+		}
+	}
+	ms.tokens = &tokens
+
+	// Initialize HTTP client with auth middleware (Bearer + DPoP with auto-refresh)
+	auth.InitHTTPClient(ms.as, ms.tokens, func(nt auth.Tokens) {
+		if err := auth.SaveRefershToken(nt.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+			log.Println("chyba při ukládání refresh tokenu po obnově:", err)
+		}
+	})
+
+	go ms.startRustDeskServerSync()
+	go ms.startRustDeskServerTasks()
 
 	for {
 		select {
@@ -307,20 +343,13 @@ func main() {
 		switch os.Args[1] {
 		case "install":
 			serverUrl := os.Args[2]
-			anonKey := os.Args[3]
-			if serverUrl == "" || anonKey == "" {
-				fmt.Println("Musi byt zadna server url a anon key")
-				log.Fatalln("Musi byt zadna server url a anon key")
+			if serverUrl == "" {
+				fmt.Println("Musi byt zadna server url")
+				log.Fatalln("Musi byt zadna server url")
 			}
 			// write server url and anon key to registry
 			var serverUrlKey = RegistryValue{Type: RegistryString, Value: serverUrl}
 			key, err := SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url", serverUrlKey)
-			if err != nil {
-				log.Fatalf("chyba při nastavování hodnoty v registru: %v", err)
-			}
-			key.Close()
-			var anonKeyKey = RegistryValue{Type: RegistryString, Value: anonKey}
-			key, err = SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "anon_key", anonKeyKey)
 			if err != nil {
 				log.Fatalf("chyba při nastavování hodnoty v registru: %v", err)
 			}
@@ -340,48 +369,47 @@ func main() {
 		}
 	}
 
-	// check if computer is enrolled
-
-	serverURL, err := GetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url")
-	if err != nil {
-		log.Fatalln("chyba při získávání klíča z registru: ", err)
-	}
-
-	as := auth.NewAuthService(serverURL)
-	ms := NewMainService(serverURL, as)
-
-	// check if computer is registered
-	registered, err := ms.as.IsEnrolled()
-	if err != nil {
-		log.Fatalf("chyba při kontrole registrace: %v", err)
-	}
-
-	fmt.Println("Zda je počítač zaregistrován: ", registered)
-	var tokens auth.Tokens
-	if !registered {
-		log.Println("Tento počítač není zaregistrován na serveru. Registruji...")
-		tokens, err = ms.as.Enroll()
-		if err != nil {
-			log.Fatalf("chyba při registraci počítače: %v", err)
-		}
-		err = auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt")
-		if err != nil {
-			log.Fatalln("chyba při ukládání klíče: ", err)
-			return
-		}
-	}
-	ms.tokens = &tokens
-
-	// Initialize HTTP client with auth middleware (Bearer + DPoP with auto-refresh)
-	auth.InitHTTPClient(ms.as, ms.tokens, func(nt auth.Tokens) {
-		if err := auth.SaveRefershToken(nt.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-			log.Println("chyba při ukládání refresh tokenu po obnově:", err)
-		}
-	})
-
 	if !consts.Production {
 		// initialize supabase client
 		// for dev only
+
+		serverURL, err := GetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url")
+		if err != nil {
+			log.Fatalln("chyba při získávání klíča z registru: ", err)
+		}
+
+		// check if computer is enrolled
+
+		as := auth.NewAuthService(serverURL)
+		ms := NewMainService(serverURL, as)
+
+		// check if computer is registered
+		registered, err := ms.as.IsEnrolled()
+		if err != nil {
+			log.Fatalf("chyba při kontrole registrace: %v", err)
+		}
+
+		fmt.Println("Zda je počítač zaregistrován: ", registered)
+		var tokens auth.Tokens
+		if !registered {
+			log.Println("Tento počítač není zaregistrován na serveru. Registruji...")
+			tokens, err = ms.as.Enroll()
+			if err != nil {
+				log.Fatalf("chyba při registraci počítače: %v", err)
+			}
+			err = auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt")
+			if err != nil {
+				log.Fatalln("chyba při ukládání klíče: ", err)
+			}
+		}
+		ms.tokens = &tokens
+
+		// Initialize HTTP client with auth middleware (Bearer + DPoP with auto-refresh)
+		auth.InitHTTPClient(ms.as, ms.tokens, func(nt auth.Tokens) {
+			if err := auth.SaveRefershToken(nt.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+				log.Println("chyba při ukládání refresh tokenu po obnově:", err)
+			}
+		})
 
 		go ms.startRustDeskServerSync()
 		go ms.startRustDeskServerTasks()
@@ -389,9 +417,6 @@ func main() {
 			time.Sleep(1 * time.Hour)
 		}
 	}
-
-	go ms.startRustDeskServerSync()
-	go ms.startRustDeskServerTasks()
 
 	if err := svc.Run(consts.ServiceName, &serviceHandler{}); err != nil {
 		log.Fatalf("chyba služby: %v", err)
