@@ -30,7 +30,10 @@ type AuthTransport struct {
 // Pass current tokens and AuthService for refresh; OnRefresh is called when tokens rotate.
 func InitHTTPClient(as *AuthService, tokens *Tokens, onRefresh func(Tokens)) {
 	// Underlying transport with TLS verify disabled to match existing utils.Get/Put behavior.
-	base := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	base := &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: true, // reduce risk of implicit retries with reused headers
+	}
 	tr := &AuthTransport{
 		Base:      base,
 		Tokens:    tokens,
@@ -235,16 +238,18 @@ func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
 }
 
 func (t *AuthTransport) setAuthHeaders(req *http.Request, accessToken string) {
-	if accessToken == "" {
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	// Adjust iat by observed server skew
-	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
-	iat := time.Now().Add(-skew)
-	if dpop, err := CreateDPoPAt(req.Method, req.URL.String(), accessToken, iat); err == nil {
-		req.Header.Set("DPoP", dpop)
-	}
+    if accessToken == "" {
+        return
+    }
+    req.Header.Set("Authorization", "Bearer "+accessToken)
+    // Adjust iat by observed server skew
+    skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
+    iat := time.Now().Add(-skew)
+    if dpop, err := CreateDPoPAt(req.Method, req.URL.String(), accessToken, iat); err == nil {
+        req.Header.Set("DPoP", dpop)
+    } else {
+        log.Println("DPoP build error:", err)
+    }
 }
 
 func cloneRequest(req *http.Request) *http.Request {

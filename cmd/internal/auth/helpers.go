@@ -241,31 +241,38 @@ func CreateDPoP(adress string, accessToken string) (string, error) {
 
 // CreateDPoPWithMethod builds a DPoP proof for the given HTTP method and address using the current time.
 func CreateDPoPWithMethod(method string, adress string, accessToken string) (string, error) {
-    return CreateDPoPAt(method, adress, accessToken, time.Now())
+    s, _, err := CreateDPoPAtWithJTI(method, adress, accessToken, time.Now())
+    return s, err
 }
 
 // CreateDPoPAt builds a DPoP proof with an explicit iat timestamp.
 func CreateDPoPAt(method string, adress string, accessToken string, iat time.Time) (string, error) {
+    s, _, err := CreateDPoPAtWithJTI(method, adress, accessToken, iat)
+    return s, err
+}
+
+// CreateDPoPAtWithJTI builds a DPoP proof and also returns the jti used.
+func CreateDPoPAtWithJTI(method string, adress string, accessToken string, iat time.Time) (string, string, error) {
 	// Load private key generated during enroll
 	priv, err := loadPrivJWK(consts.ProgramDataDir+"/certs", "priv.jwk")
-	if err != nil {
-		return "", err
-	}
+    if err != nil {
+        return "", "", err
+    }
 	// Prepare public JWK for header
 	pubJWK, err := jwk.FromRaw(&priv.PublicKey)
-	if err != nil {
-		return "", err
-	}
+    if err != nil {
+        return "", "", err
+    }
 
 	// Marshal to map for jwt header compatibility
 	jwkBytes, err := json.Marshal(pubJWK)
-	if err != nil {
-		return "", err
-	}
+    if err != nil {
+        return "", "", err
+    }
 	var jwkMap map[string]any
-	if err := json.Unmarshal(jwkBytes, &jwkMap); err != nil {
-		return "", err
-	}
+    if err := json.Unmarshal(jwkBytes, &jwkMap); err != nil {
+        return "", "", err
+    }
 	// Compute ath if access token provided
 	var ath string
 	if accessToken != "" {
@@ -273,11 +280,12 @@ func CreateDPoPAt(method string, adress string, accessToken string, iat time.Tim
 		ath = base64.RawURLEncoding.EncodeToString(sum[:])
 	}
     // Claims per RFC9449
+    jti := uuid.NewString()
     claims := jwt.MapClaims{
         "htm": strings.ToUpper(method),
         "htu": adress,
         "iat": iat.Unix(),
-        "jti": uuid.NewString(),
+        "jti": jti,
     }
 	if ath != "" {
 		claims["ath"] = ath
@@ -285,7 +293,11 @@ func CreateDPoPAt(method string, adress string, accessToken string, iat time.Tim
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	token.Header["typ"] = "dpop+jwt"
 	token.Header["jwk"] = jwkMap
-	return token.SignedString(priv)
+    s, err := token.SignedString(priv)
+    if err != nil {
+        return "", "", err
+    }
+    return s, jti, nil
 }
 
 func LoadRefreshToken(path string, fileName string) (string, error) {

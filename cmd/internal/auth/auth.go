@@ -1,14 +1,14 @@
 package auth
 
 import (
-	consts "KiskaLE/RustDesk-ID/cmd/internal/const"
-	"KiskaLE/RustDesk-ID/cmd/internal/utils"
-	"encoding/json"
-	"errors"
-	"log"
-	"time"
+    consts "KiskaLE/RustDesk-ID/cmd/internal/const"
+    "KiskaLE/RustDesk-ID/cmd/internal/utils"
+    "encoding/json"
+    "errors"
+    "log"
+    "time"
 
-	"github.com/supabase-community/supabase-go"
+    "github.com/supabase-community/supabase-go"
 )
 
 type AuthService struct {
@@ -148,5 +148,38 @@ func (as *AuthService) RefreshTokens(refreshToken string) (Tokens, error) {
 		return Tokens{}, err
 	}
 
-	return resTokens.Tokens, nil
+    return resTokens.Tokens, nil
+}
+
+// RecoverTokens calls /token/recover with a DPoP proof (no Authorization)
+// and returns a fresh pair of access/refresh tokens.
+func (as *AuthService) RecoverTokens() (Tokens, error) {
+    type RecoverResponse struct {
+        Tokens Tokens `json:"tokens"`
+    }
+
+    url := as.serverUrl + "/token/recover"
+
+    // Build DPoP for POST without access token (no ath)
+    dpop, _, err := CreateDPoPAtWithJTI("POST", url, "", time.Now())
+    if err != nil {
+        return Tokens{}, err
+    }
+
+    res, err := utils.Post(url, map[string]string{}, map[string]string{
+        "Content-Type": "application/json",
+        "DPoP":         dpop,
+    })
+    if err != nil {
+        return Tokens{}, err
+    }
+    if res.StatusCode != 200 {
+        return Tokens{}, errors.New("POST chyba pri obnoveni tokenu pres recover")
+    }
+
+    var payload RecoverResponse
+    if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+        return Tokens{}, err
+    }
+    return payload.Tokens, nil
 }
