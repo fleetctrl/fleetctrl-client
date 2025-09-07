@@ -5,6 +5,7 @@ import (
 	consts "KiskaLE/RustDesk-ID/cmd/internal/const"
 	"KiskaLE/RustDesk-ID/cmd/internal/utils"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -33,12 +34,12 @@ type SetPasswordTask struct {
 
 type MainService struct {
 	as        *auth.AuthService
-	serverUrl string
+	serverURL string
 	tokens    *auth.Tokens
 }
 
-func NewMainService(serverUrl string, as *auth.AuthService) *MainService {
-	return &MainService{serverUrl: serverUrl, as: as}
+func NewMainService(as *auth.AuthService, serverURL string) *MainService {
+	return &MainService{as: as, serverURL: serverURL}
 }
 
 func (ms *MainService) startRustDeskServerSync() {
@@ -99,7 +100,7 @@ func (ms *MainService) startRustDeskServerSync() {
 			LastConnection: time.Now().Format(time.RFC3339),
 		}
 
-		res, err := utils.Patch(consts.ServerUrl+"/computer/rustdesk-sync", map[string]string{
+		res, err := utils.Patch(ms.serverURL+"/computer/rustdesk-sync", map[string]string{
 			"name":            computer.Name,
 			"rustdesk_id":     computer.RustdeskID,
 			"ip":              computer.IP,
@@ -134,7 +135,7 @@ func (ms *MainService) startRustDeskServerTasks() {
 		}
 
 		// get tasks
-		tasksRes, err := utils.Get(consts.ServerUrl+"/tasks", map[string]string{
+		tasksRes, err := utils.Get(ms.serverURL+"/tasks", map[string]string{
 			"Content-Type": "application/json",
 		})
 		if err != nil {
@@ -160,7 +161,7 @@ func (ms *MainService) startRustDeskServerTasks() {
 		for i := 0; i < len(tasks); i++ {
 			task := tasks[i]
 			// set task started
-			utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
+			utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 				"status": "IN_PROGRESS",
 				"error":  "",
 			}, map[string]string{
@@ -180,7 +181,7 @@ func (ms *MainService) startRustDeskServerTasks() {
 				err := cmd.Run()
 				if err != nil {
 					log.Println(err)
-					utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
+					utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 						"status": "ERROR",
 						"error":  err.Error(),
 					}, map[string]string{
@@ -190,7 +191,7 @@ func (ms *MainService) startRustDeskServerTasks() {
 				}
 				log.Println("Password set")
 
-				utils.Patch(consts.ServerUrl+"/task/"+task.ID, map[string]string{
+				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 					"status": "SUCCESS",
 					"error":  "",
 				}, map[string]string{
@@ -244,58 +245,52 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 	// check if computer is enrolled
 
 	as := auth.NewAuthService(serverURL)
-	ms := NewMainService(serverURL, as)
+	ms := NewMainService(as, serverURL)
 
 	// check if computer is registered
 	registered, err := ms.as.IsEnrolled()
 	if err != nil {
 		log.Fatalf("chyba při kontrole registrace: %v", err)
 	}
+	if !registered {
+		log.Fatalln("Tento počítač není zaregistrován na serveru.")
+	}
 
-    fmt.Println("Zda je počítač zaregistrován: ", registered)
-    var tokens auth.Tokens
-    if !registered {
-        log.Println("Tento počítač není zaregistrován na serveru. Registruji...")
-        tokens, err = ms.as.Enroll()
-        if err != nil {
-            log.Fatalf("chyba při registraci počítače: %v", err)
-        }
-        if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-            log.Fatalln("chyba při ukládání klíče: ", err)
-        }
-    } else {
-        // Zařízení je registrováno – načti refresh token a obnov access token
-        if rt, lerr := auth.LoadRefreshToken(consts.ProgramDataDir+"/tokens", "refresh_token.txt"); lerr == nil && rt != "" {
-            if nt, rerr := ms.as.RefreshTokens(rt); rerr == nil {
-                tokens = nt
-                // uložit nový refresh token po rotaci
-                if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-                    log.Println("varování: nepodařilo se uložit refresh token po obnově:", err)
-                }
-            } else {
-                log.Println("obnova tokenu z refresh selhala, zkusím recover:", rerr)
-                if nt, rerr2 := ms.as.RecoverTokens(); rerr2 == nil {
-                    tokens = nt
-                    if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-                        log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
-                    }
-                } else {
-                    log.Println("recover tokenů selhal:", rerr2)
-                }
-            }
-        } else {
-            log.Println("refresh token nebyl nalezen, pokusím se o recover bez refresh tokenu")
-            if nt, rerr := ms.as.RecoverTokens(); rerr == nil {
-                tokens = nt
-                if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-                    log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
-                }
-            } else {
-                log.Println("recover tokenů selhal:", rerr)
-            }
-        }
-    }
-    ms.tokens = &tokens
+	fmt.Println("Zda je počítač zaregistrován: ", registered)
+	var tokens auth.Tokens
+
+	// načti refresh token a obnov access token
+	if rt, lerr := auth.LoadRefreshToken(consts.ProgramDataDir+"/tokens", "refresh_token.txt"); lerr == nil && rt != "" {
+		if nt, rerr := ms.as.RefreshTokens(rt); rerr == nil {
+			tokens = nt
+			// uložit nový refresh token po rotaci
+			if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+				log.Println("varování: nepodařilo se uložit refresh token po obnově:", err)
+			}
+		} else {
+			log.Println("obnova tokenu z refresh selhala, zkusím recover:", rerr)
+			if nt, rerr2 := ms.as.RecoverTokens(); rerr2 == nil {
+				tokens = nt
+				if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+					log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
+				}
+			} else {
+				log.Println("recover tokenů selhal:", rerr2)
+			}
+		}
+	} else {
+		log.Println("refresh token nebyl nalezen, pokusím se o recover bez refresh tokenu")
+		if nt, rerr := ms.as.RecoverTokens(); rerr == nil {
+			tokens = nt
+			if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+				log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
+			}
+		} else {
+			log.Println("recover tokenů selhal:", rerr)
+		}
+	}
+
+	ms.tokens = &tokens
 
 	// Initialize HTTP client with auth middleware (Bearer + DPoP with auto-refresh)
 	auth.InitHTTPClient(ms.as, ms.tokens, func(nt auth.Tokens) {
@@ -331,11 +326,37 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 }
 
 func main() {
-	// create folder
-	err := os.MkdirAll(consts.TargetDir, 0755)
-	if err != nil {
-		log.Fatalf("chyba při vytváření adresáře: %v", err)
+
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "install":
+			installCmd := flag.NewFlagSet("install", flag.ExitOnError)
+			enrollToken := installCmd.String("token", "", "Enrollment token")
+			serverURL := installCmd.String("url", "", "Server URL")
+
+			err := installCmd.Parse(os.Args[2:])
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			if *enrollToken == "" || *serverURL == "" {
+				log.Fatalln("chybí --token nebo --url")
+			}
+
+			err = InstallService(*enrollToken, *serverURL)
+			if err != nil {
+				panic(err)
+			}
+			return
+		case "remove":
+			err := RemoveService()
+			if err != nil {
+				panic(err)
+			}
+			return
+		}
 	}
+
 	// 1) otevřeme (nebo vytvoříme) soubor pro zápis
 	f, err := os.OpenFile(consts.TargetDir+`\client.log`,
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, // přidáváme na konec
@@ -351,67 +372,18 @@ func main() {
 	// 3) nastavíme formát (datum, čas, soubor:řádek)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// inicializovat registry
-	err = CreateRegistryKey(registry.LOCAL_MACHINE, consts.CompanyRegitryKey)
-	if err != nil {
-		log.Fatalf("chyba při inicializování registry: %v", err)
-	}
-	err = CreateRegistryKey(registry.LOCAL_MACHINE, consts.RegisteryRootKey)
-	if err != nil {
-		log.Fatalf("chyba při inicializování registry: %v", err)
-	}
-
-	// vytvoření registeru s verzí clienta
-	var versionKey = RegistryValue{Type: RegistryString, Value: consts.Version}
-	key, err := SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
-	if err != nil {
-		log.Fatalln("chyba při nastavování hodnoty v registru: ", err)
-	}
-	key.Close()
-
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "install":
-			serverUrl := os.Args[2]
-			if serverUrl == "" {
-				fmt.Println("Musi byt zadna server url")
-				log.Fatalln("Musi byt zadna server url")
-			}
-			// write server url and anon key to registry
-			var serverUrlKey = RegistryValue{Type: RegistryString, Value: serverUrl}
-			key, err := SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url", serverUrlKey)
-			if err != nil {
-				log.Fatalf("chyba při nastavování hodnoty v registru: %v", err)
-			}
-			key.Close()
-
-			err = InstallService(consts.ServiceName, consts.ServiceDisplayName)
-			if err != nil {
-				log.Fatalf("chyba při instalaci služby: %v", err)
-			}
-			return
-		case "remove":
-			err := RemoveService(consts.ServiceName)
-			if err != nil {
-				log.Fatalf("chyba při odinstalování služby: %v", err)
-			}
-			return
-		}
-	}
-
-    if !consts.Production {
+	if !consts.Production {
 		// initialize supabase client
 		// for dev only
+		// check if computer is enrolled
 
 		serverURL, err := GetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url")
 		if err != nil {
 			log.Fatalln("chyba při získávání klíča z registru: ", err)
 		}
 
-		// check if computer is enrolled
-
 		as := auth.NewAuthService(serverURL)
-		ms := NewMainService(serverURL, as)
+		ms := NewMainService(as, serverURL)
 
 		// check if computer is registered
 		registered, err := ms.as.IsEnrolled()
@@ -419,48 +391,41 @@ func main() {
 			log.Fatalf("chyba při kontrole registrace: %v", err)
 		}
 
-        fmt.Println("Zda je počítač zaregistrován: ", registered)
-        var tokens auth.Tokens
-        if !registered {
-            log.Println("Tento počítač není zaregistrován na serveru. Registruji...")
-            tokens, err = ms.as.Enroll()
-            if err != nil {
-                log.Fatalf("chyba při registraci počítače: %v", err)
-            }
-            if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-                log.Fatalln("chyba při ukládání klíče: ", err)
-            }
-        } else {
-            if rt, lerr := auth.LoadRefreshToken(consts.ProgramDataDir+"/tokens", "refresh_token.txt"); lerr == nil && rt != "" {
-                if nt, rerr := ms.as.RefreshTokens(rt); rerr == nil {
-                    tokens = nt
-                    if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-                        log.Println("varování: nepodařilo se uložit refresh token po obnově:", err)
-                    }
-                } else {
-                    log.Println("obnova tokenu z refresh selhala, zkusím recover:", rerr)
-                    if nt, rerr2 := ms.as.RecoverTokens(); rerr2 == nil {
-                        tokens = nt
-                        if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-                            log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
-                        }
-                    } else {
-                        log.Println("recover tokenů selhal:", rerr2)
-                    }
-                }
-            } else {
-                log.Println("refresh token nebyl nalezen, pokusím se o recover bez refresh tokenu")
-                if nt, rerr := ms.as.RecoverTokens(); rerr == nil {
-                    tokens = nt
-                    if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-                        log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
-                    }
-                } else {
-                    log.Println("recover tokenů selhal:", rerr)
-                }
-            }
-        }
-        ms.tokens = &tokens
+		if !registered {
+			log.Fatalln("Tento počítač není zaregistrován na serveru.")
+		}
+
+		var tokens auth.Tokens
+
+		if rt, lerr := auth.LoadRefreshToken(consts.ProgramDataDir+"/tokens", "refresh_token.txt"); lerr == nil && rt != "" {
+			if nt, rerr := ms.as.RefreshTokens(rt); rerr == nil {
+				tokens = nt
+				if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+					log.Println("varování: nepodařilo se uložit refresh token po obnově:", err)
+				}
+			} else {
+				log.Println("obnova tokenu z refresh selhala, zkusím recover:", rerr)
+				if nt, rerr2 := ms.as.RecoverTokens(); rerr2 == nil {
+					tokens = nt
+					if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+						log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
+					}
+				} else {
+					log.Println("recover tokenů selhal:", rerr2)
+				}
+			}
+		} else {
+			log.Println("refresh token nebyl nalezen, pokusím se o recover bez refresh tokenu")
+			if nt, rerr := ms.as.RecoverTokens(); rerr == nil {
+				tokens = nt
+				if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+					log.Println("varování: nepodařilo se uložit refresh token po recover:", err)
+				}
+			} else {
+				log.Println("recover tokenů selhal:", rerr)
+			}
+		}
+		ms.tokens = &tokens
 
 		// Initialize HTTP client with auth middleware (Bearer + DPoP with auto-refresh)
 		auth.InitHTTPClient(ms.as, ms.tokens, func(nt auth.Tokens) {

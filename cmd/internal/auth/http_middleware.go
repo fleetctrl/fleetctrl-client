@@ -63,6 +63,12 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req1 := cloneRequest(req)
 	t.setAuthHeaders(req1, at)
 
+	// Bypass middleware for auth/health endpoints to avoid recursion
+	// and unintended header overrides (e.g., DPoP on /token/recover).
+	if isBypassedPath(req.URL.Path) {
+		return base.RoundTrip(req1)
+	}
+
 	res, err := base.RoundTrip(req1)
 	if err != nil {
 		// If server didn't respond, wait until it's online and retry once
@@ -92,6 +98,11 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Drain and close the first response before retry
 	drainAndClose(res.Body)
 
+	if req.Header.Get("Second-Try") == "true" {
+		// If already retried, give up
+		log.Panic("cound not refresh tokens")
+	}
+
 	if err := t.refreshLocked(rt); err != nil {
 		// If refresh failed, try recover flow once
 		if rerr := t.RecoverLocked(req.Context()); rerr != nil {
@@ -106,6 +117,7 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// recreate body for retry
 		b, _ := req.GetBody()
 		req2.Body = b
+		req2.Header.Add("Second-Try", "true")
 	}
 	t.setAuthHeaders(req2, at)
 	return base.RoundTrip(req2)
@@ -117,7 +129,7 @@ func (t *AuthTransport) waitForServerOnline(ctx context.Context) error {
 		return nil
 	}
 	backoff := 60 * time.Second
-	healthURL := t.AS.serverUrl + "/health"
+	healthURL := t.AS.serverURL + "/health"
 	client := &http.Client{Transport: t.Base, Timeout: 10 * time.Second}
 	for {
 		select {
@@ -196,7 +208,7 @@ func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
 	}
 
 	// Construct recover request (POST, empty body) with DPoP only
-	recoverURL := t.AS.serverUrl + "/token/recover"
+	recoverURL := t.AS.serverURL + "/token/recover"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, recoverURL, nil)
 	if err != nil {
 		return err
@@ -238,18 +250,18 @@ func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
 }
 
 func (t *AuthTransport) setAuthHeaders(req *http.Request, accessToken string) {
-    if accessToken == "" {
-        return
-    }
-    req.Header.Set("Authorization", "Bearer "+accessToken)
-    // Adjust iat by observed server skew
-    skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
-    iat := time.Now().Add(-skew)
-    if dpop, err := CreateDPoPAt(req.Method, req.URL.String(), accessToken, iat); err == nil {
-        req.Header.Set("DPoP", dpop)
-    } else {
-        log.Println("DPoP build error:", err)
-    }
+	if accessToken == "" {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	// Adjust iat by observed server skew
+	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
+	iat := time.Now().Add(-skew)
+	if dpop, err := CreateDPoPAt(req.Method, req.URL.String(), accessToken, iat); err == nil {
+		req.Header.Set("DPoP", dpop)
+	} else {
+		log.Println("DPoP build error:", err)
+	}
 }
 
 func cloneRequest(req *http.Request) *http.Request {
@@ -270,4 +282,15 @@ func drainAndClose(rc io.ReadCloser) {
 	}
 	io.Copy(io.Discard, rc)
 	rc.Close()
+}
+
+// isBypassedPath returns true for endpoints that should not be wrapped
+// by the auth middleware (no auto-refresh, no header injection).
+func isBypassedPath(path string) bool {
+	switch path {
+	case "/health", "/enroll", "/token/refresh", "/token/recover":
+		return true
+	default:
+		return false
+	}
 }

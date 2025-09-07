@@ -224,94 +224,13 @@ func SaveRefershToken(refreshToken string, path string, fileName string) error {
 		}
 	}
 	// Encrypt with DPAPI - user scope (default)
-	enc, err := dpapi.Encrypt(refreshToken)
+	enc, err := dpapi.EncryptMachineLocal(refreshToken)
 	if err != nil {
 		return err
 	}
 
 	// Write file with restricted permissions force
 	return os.WriteFile(path+"/"+fileName, []byte(enc), 0600)
-}
-
-// CreateDPoP builds a DPoP proof for the given address using the current time and method GET.
-// Prefer CreateDPoPWithMethod or CreateDPoPAt from new code paths.
-func CreateDPoP(adress string, accessToken string) (string, error) {
-    return CreateDPoPWithMethod("GET", adress, accessToken)
-}
-
-// CreateDPoPWithMethod builds a DPoP proof for the given HTTP method and address using the current time.
-func CreateDPoPWithMethod(method string, adress string, accessToken string) (string, error) {
-    s, _, err := CreateDPoPAtWithJTI(method, adress, accessToken, time.Now())
-    return s, err
-}
-
-// CreateDPoPAt builds a DPoP proof with an explicit iat timestamp.
-func CreateDPoPAt(method string, adress string, accessToken string, iat time.Time) (string, error) {
-    s, _, err := CreateDPoPAtWithJTI(method, adress, accessToken, iat)
-    return s, err
-}
-
-// CreateDPoPAtWithJTI builds a DPoP proof and also returns the jti used.
-func CreateDPoPAtWithJTI(method string, adress string, accessToken string, iat time.Time) (string, string, error) {
-	// Load private key generated during enroll
-	priv, err := loadPrivJWK(consts.ProgramDataDir+"/certs", "priv.jwk")
-    if err != nil {
-        return "", "", err
-    }
-	// Prepare public JWK for header
-	pubJWK, err := jwk.FromRaw(&priv.PublicKey)
-    if err != nil {
-        return "", "", err
-    }
-
-	// Marshal to map for jwt header compatibility
-	jwkBytes, err := json.Marshal(pubJWK)
-    if err != nil {
-        return "", "", err
-    }
-	var jwkMap map[string]any
-    if err := json.Unmarshal(jwkBytes, &jwkMap); err != nil {
-        return "", "", err
-    }
-	// Compute ath if access token provided
-	var ath string
-	if accessToken != "" {
-		sum := sha256.Sum256([]byte(accessToken))
-		ath = base64.RawURLEncoding.EncodeToString(sum[:])
-	}
-    // Claims per RFC9449
-    jti := uuid.NewString()
-    claims := jwt.MapClaims{
-        "htm": strings.ToUpper(method),
-        "htu": adress,
-        "iat": iat.Unix(),
-        "jti": jti,
-    }
-	if ath != "" {
-		claims["ath"] = ath
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
-	token.Header["typ"] = "dpop+jwt"
-	token.Header["jwk"] = jwkMap
-    s, err := token.SignedString(priv)
-    if err != nil {
-        return "", "", err
-    }
-    return s, jti, nil
-}
-
-func LoadRefreshToken(path string, fileName string) (string, error) {
-	enc, err := os.ReadFile(path + "/" + fileName)
-	if err != nil {
-		return "", err
-	}
-
-	dec, err := dpapi.Decrypt(string(enc))
-	if err != nil {
-		return "", err
-	}
-
-	return dec, nil
 }
 
 func savePrivJWK(priv *ecdsa.PrivateKey, path string, fileName string) error {
@@ -337,13 +256,94 @@ func savePrivJWK(priv *ecdsa.PrivateKey, path string, fileName string) error {
 	}
 
 	// Šifrování přes DPAPI (user scope)
-	enc, err := dpapi.Encrypt(string(plainJSON))
+	enc, err := dpapi.EncryptMachineLocal(string(plainJSON))
 	if err != nil {
 		return err
 	}
 
 	// Write file with restricted permissions
 	return os.WriteFile(path+"/"+fileName, []byte(enc), 0600)
+}
+
+// CreateDPoP builds a DPoP proof for the given address using the current time and method GET.
+// Prefer CreateDPoPWithMethod or CreateDPoPAt from new code paths.
+func CreateDPoP(adress string, accessToken string) (string, error) {
+	return CreateDPoPWithMethod("GET", adress, accessToken)
+}
+
+// CreateDPoPWithMethod builds a DPoP proof for the given HTTP method and address using the current time.
+func CreateDPoPWithMethod(method string, adress string, accessToken string) (string, error) {
+	s, _, err := CreateDPoPAtWithJTI(method, adress, accessToken, time.Now())
+	return s, err
+}
+
+// CreateDPoPAt builds a DPoP proof with an explicit iat timestamp.
+func CreateDPoPAt(method string, adress string, accessToken string, iat time.Time) (string, error) {
+	s, _, err := CreateDPoPAtWithJTI(method, adress, accessToken, iat)
+	return s, err
+}
+
+// CreateDPoPAtWithJTI builds a DPoP proof and also returns the jti used.
+func CreateDPoPAtWithJTI(method string, adress string, accessToken string, iat time.Time) (string, string, error) {
+	// Load private key generated during enroll
+	priv, err := loadPrivJWK(consts.ProgramDataDir+"/certs", "priv.jwk")
+	if err != nil {
+		return "", "", err
+	}
+	// Prepare public JWK for header
+	pubJWK, err := jwk.FromRaw(&priv.PublicKey)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Marshal to map for jwt header compatibility
+	jwkBytes, err := json.Marshal(pubJWK)
+	if err != nil {
+		return "", "", err
+	}
+	var jwkMap map[string]any
+	if err := json.Unmarshal(jwkBytes, &jwkMap); err != nil {
+		return "", "", err
+	}
+	// Compute ath if access token provided
+	var ath string
+	if accessToken != "" {
+		sum := sha256.Sum256([]byte(accessToken))
+		ath = base64.RawURLEncoding.EncodeToString(sum[:])
+	}
+	// Claims per RFC9449
+	jti := uuid.NewString()
+	claims := jwt.MapClaims{
+		"htm": strings.ToUpper(method),
+		"htu": adress,
+		"iat": iat.Unix(),
+		"jti": jti,
+	}
+	if ath != "" {
+		claims["ath"] = ath
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token.Header["typ"] = "dpop+jwt"
+	token.Header["jwk"] = jwkMap
+	s, err := token.SignedString(priv)
+	if err != nil {
+		return "", "", err
+	}
+	return s, jti, nil
+}
+
+func LoadRefreshToken(path string, fileName string) (string, error) {
+	enc, err := os.ReadFile(path + "/" + fileName)
+	if err != nil {
+		return "", err
+	}
+
+	dec, err := dpapi.Decrypt(string(enc))
+	if err != nil {
+		return "", err
+	}
+
+	return dec, nil
 }
 
 func loadPrivJWK(dir, fileName string) (*ecdsa.PrivateKey, error) {

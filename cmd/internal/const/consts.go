@@ -10,5 +10,4 @@ const (
 	TargetExeName      = "client.exe"
 	CompanyRegitryKey  = `SOFTWARE\WOW6432Node\fleetctrl`
 	RegisteryRootKey   = `SOFTWARE\WOW6432Node\fleetctrl\client`
-	ServerUrl          = "http://vscode.ondomain.org:8090"
 )
