@@ -108,8 +108,24 @@ func InstallService(enrollToken string, serverURL string) error {
 		}
 	}
 
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+
+	exePath := filepath.Join(consts.TargetDir, consts.TargetExeName)
+	// zjistit jesli služba není zaregistrována
+	s, err := m.OpenService(consts.ServiceName)
+	if err == nil {
+		// Služba existuje
+		s.Close()
+		// Spustění odstranění služby
+		RemoveService()
+	}
+
 	// create folder
-	err := os.MkdirAll(consts.TargetDir, 0755)
+	err = os.MkdirAll(consts.TargetDir, 0755)
 	if err != nil {
 		return errors.New("chyba při vytváření adresáře: " + err.Error())
 	}
@@ -131,23 +147,6 @@ func InstallService(enrollToken string, serverURL string) error {
 		return errors.New("chyba při nastavování hodnoty v registru: " + err.Error())
 	}
 	key.Close()
-
-	m, err := mgr.Connect()
-	if err != nil {
-		return err
-	}
-	defer m.Disconnect()
-
-	exePath := filepath.Join(consts.TargetDir, consts.TargetExeName)
-	// zjistit jesli služba není zaregistrována
-	s, err := m.OpenService(consts.ServiceName)
-	if err == nil {
-		// Služba existuje
-		s.Close()
-		// Spustění odstranění služby
-		RemoveService()
-		return nil
-	}
 
 	as := auth.NewAuthService(serverURL)
 	tokens, err := as.Enroll(enrollToken)
