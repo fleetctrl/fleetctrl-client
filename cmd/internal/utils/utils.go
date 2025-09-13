@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os/exec"
-	"strings"
 
 	"github.com/joho/godotenv"
 )
+
+type HttpError struct {
+	Error string `json:"error"`
+}
 
 // ParseJSON reads the request body as JSON and decodes it into the provided value.
 // It returns an error if the request body is missing or if the JSON decoding fails.
@@ -18,6 +20,14 @@ func ParseJSON(r *http.Request, payload any) error {
 		return fmt.Errorf("missing request body")
 	}
 	return json.NewDecoder(r.Body).Decode(payload)
+}
+
+func ParseHttpError(r *http.Response) string {
+	var httpError HttpError
+	if err := json.NewDecoder(r.Body).Decode(&httpError); err != nil {
+		return ""
+	}
+	return httpError.Error
 }
 
 // WriteJSON writes a JSON response with the provided HTTP status code.
@@ -45,15 +55,12 @@ func LoadEnv() {
 }
 
 func Ping(host string) (bool, error) {
-	host = strings.TrimPrefix(host, "http://")
-	host = strings.TrimPrefix(host, "https://")
-	host = strings.TrimSuffix(host, "/")
-
-	// TODO trim end /
-	cmd := exec.Command("ping", "-n", "1", host)
-	err := cmd.Run()
+	res, err := Get(host+"/health", map[string]string{})
 	if err != nil {
 		return false, err
+	}
+	if res.StatusCode != 200 {
+		return false, nil
 	}
 	return true, nil
 }

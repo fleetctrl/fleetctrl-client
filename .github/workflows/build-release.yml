@@ -1,6 +1,6 @@
 name: Build and Release
 
-on:
+on: 
   push:
     branches: [main]
 
@@ -13,11 +13,23 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: stable
+
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\go\pkg\mod
+            ~\AppData\Local\go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**\\go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
       - name: Extract version (PowerShell)
         id: extract_version
@@ -25,36 +37,26 @@ jobs:
         run: |
           $pattern = '^\s*version\s*=\s*"([^"]+)"'
           $match = Select-String -Path "cmd\main\main.go" -Pattern $pattern -Encoding UTF8
-          if (-not $match) {
-            Write-Error "Version not found in cmd\main\main.go"
-            exit 1
-          }
+          if (-not $match) { Write-Error "Version not found in cmd\main\main.go"; exit 1 }
           $version = $match.Matches[0].Groups[1].Value
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Build
+      - name: Build (Windows)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "bin" | Out-Null
           go build -o ".\bin\fleetctrl-client.exe" ".\cmd\main\"
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release and Upload Asset
+        uses: softprops/action-gh-release@v2
         with:
+          name: v${{ steps.extract_version.outputs.version }}
           tag_name: v${{ steps.extract_version.outputs.version }}
-          release_name: v${{ steps.extract_version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            ./bin/fleetctrl-client.exe
           draft: false
           prerelease: false
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./bin/fleetctrl-client.exe
-          asset_name: fleetctrl-client.exe
-          asset_content_type: application/octet-stream

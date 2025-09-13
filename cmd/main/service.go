@@ -1,6 +1,10 @@
 package main
 
 import (
+	"KiskaLE/RustDesk-ID/cmd/internal/auth"
+	consts "KiskaLE/RustDesk-ID/cmd/internal/const"
+	"KiskaLE/RustDesk-ID/cmd/internal/utils"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,20 +17,11 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-func RemoveService(serviceName string) error {
+func RemoveService() error {
 	// Nastavení verzne na 0
-	key, err := SetRegisteryValue(registry.LOCAL_MACHINE, registeryRootKey, "version", RegistryValue{Type: RegistryString, Value: "0"})
+	key, err := SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "version", RegistryValue{Type: RegistryString, Value: "0"})
 	if err != nil {
-		log.Println("Chyba při nastavení verze: ", err)
-	}
-
-	if key != registry.Key(0) {
-		key.Close()
-	}
-
-	key, err = SetRegisteryValue(registry.LOCAL_MACHINE, registeryRootKey, "anon_key", RegistryValue{Type: RegistryString, Value: "0"})
-	if err != nil {
-		log.Println("Chyba při odstranění klíce: ", err)
+		fmt.Println("Chyba při nastavení verze: ", err)
 	}
 
 	if key != registry.Key(0) {
@@ -35,24 +30,24 @@ func RemoveService(serviceName string) error {
 
 	m, err := mgr.Connect()
 	if err != nil {
-		log.Printf("Chyba při připojení ke správci služeb: %v", err)
+		fmt.Printf("Chyba při připojení ke správci služeb: %v", err)
 		return err
 	}
 	defer m.Disconnect()
 
-	s, err := m.OpenService(serviceName)
+	s, err := m.OpenService(consts.ServiceName)
 	if err != nil {
-		log.Printf("Služba %s neexistuje nebo nelze otevřít: %v", serviceName, err)
+		fmt.Printf("Služba %s neexistuje nebo nelze otevřít: %v", consts.ServiceName, err)
 	} else {
 		defer s.Close()
 
 		// Nejdříve zastavit službu, pokud běží
 		status, err := s.Query()
 		if err == nil && status.State == svc.Running {
-			log.Println("Zastavuji běžící službu...")
+			fmt.Println("Zastavuji běžící službu...")
 			_, err = s.Control(svc.Stop)
 			if err != nil {
-				log.Printf("Varování při zastavování služby: %v", err)
+				fmt.Printf("Varování při zastavování služby: %v", err)
 			} else {
 				// Počkat na zastavení služby
 				for i := 0; i < 30; i++ {
@@ -68,31 +63,147 @@ func RemoveService(serviceName string) error {
 		// Nyní smazat službu
 		err = s.Delete()
 		if err != nil {
-			fmt.Println(err)
-			log.Println("chyba při mazání služby: ", err)
+			fmt.Println("chyba při mazání služby: ", err)
 			return err
 		}
 		s.Close()
-		log.Println("Služba byla úspěšně smazána.")
+		fmt.Println("Služba byla úspěšně smazána.")
 	}
 
 	time.Sleep(time.Duration(5) * time.Second)
 
-	// Odstranění dat s retry logikou
 	for i := 0; i < 3; i++ {
-		err = TakeOwnershipAndDelete(targetDir)
+		err = takeOwnershipAndDelete(consts.ProgramDataDir)
 		if err == nil {
 			break
 		}
-		log.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
+		fmt.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 
-	log.Println("Služba byla úspěšně odstraněna.")
+	// Odstranění dat s retry logikou
+	for i := 0; i < 3; i++ {
+		err = takeOwnershipAndDelete(consts.TargetDir)
+		if err == nil {
+			break
+		}
+		fmt.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
 	return nil
 }
 
-func TakeOwnershipAndDelete(path string) error {
+func InstallService(enrollToken string, serverURL string) error {
+	// kontorla jestli je server dostupný
+	for i := 0; i < 3; i++ {
+		ping, err := utils.Ping(serverURL)
+		if err == nil && ping {
+			fmt.Printf("Server %s je dostupný.\n", serverURL)
+			break
+		}
+		fmt.Printf("Navázání připojení k serveru selhalo. Pokus %d/3.\n", i+1)
+		time.Sleep(time.Duration(i+1) * time.Second)
+		if i == 2 {
+			return errors.New("Navazání připojení k serveru selhalo.")
+		}
+	}
+
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+
+	exePath := filepath.Join(consts.TargetDir, consts.TargetExeName)
+	// zjistit jesli služba není zaregistrována
+	s, err := m.OpenService(consts.ServiceName)
+	if err == nil {
+		// Služba existuje
+		s.Close()
+		// Spustění odstranění služby
+		RemoveService()
+	}
+
+	// create folder
+	err = os.MkdirAll(consts.TargetDir, 0755)
+	if err != nil {
+		return errors.New("chyba při vytváření adresáře: " + err.Error())
+	}
+
+	// inicializovat registry
+	err = CreateRegistryKey(registry.LOCAL_MACHINE, consts.CompanyRegitryKey)
+	if err != nil {
+		return errors.New("chyba při inicializování registry: " + err.Error())
+	}
+	err = CreateRegistryKey(registry.LOCAL_MACHINE, consts.RegisteryRootKey)
+	if err != nil {
+		return errors.New("chyba při inicializování registry: " + err.Error())
+	}
+
+	// vytvoření registeru s verzí clienta
+	var versionKey = RegistryValue{Type: RegistryString, Value: consts.Version}
+	key, err := SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
+	if err != nil {
+		return errors.New("chyba při nastavování hodnoty v registru: " + err.Error())
+	}
+	key.Close()
+
+	as := auth.NewAuthService(serverURL)
+	tokens, err := as.Enroll(enrollToken)
+	if err != nil {
+		return errors.New("chyba při registraci počítače: " + err.Error())
+	}
+	if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+		return errors.New("chyba při ukládání klíče: " + err.Error())
+	}
+
+	// Kopírování souboru
+	if err := copyExecutable(); err != nil {
+		return err
+	}
+
+	// Vytvoření služby a získání handleru
+	s, err = m.CreateService(
+		consts.ServiceName,
+		exePath,
+		mgr.Config{
+			DisplayName:      consts.ServiceDisplayName,
+			StartType:        mgr.StartAutomatic,
+			ServiceStartName: "LocalSystem",
+		},
+	)
+
+	if err != nil {
+		return errors.New("chyba při vytváření handleru služby:" + err.Error())
+	}
+
+	defer s.Close()
+
+	fmt.Printf("Služba %s byla úspěšně vytvořena", consts.ServiceName)
+
+	// Spuštění služby s retry logikou
+	for i := 0; i < 3; i++ {
+		err = s.Start()
+		if err == nil {
+			fmt.Printf("Služba %s byla úspěšně spuštěna", consts.ServiceName)
+			break
+		}
+		fmt.Printf("Pokus %d/3 spuštění služby selhal: %v", i+1, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+		if i == 2 {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func takeOwnershipAndDelete(path string) error {
+	// zjistit jesli adresář exituje
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	// 1. Převzít vlastnictví
 	cmdTakeown := exec.Command("takeown", "/F", path, "/R", "/D", "Y")
 	out, err := cmdTakeown.CombinedOutput()
@@ -117,80 +228,6 @@ func TakeOwnershipAndDelete(path string) error {
 	return nil
 }
 
-func InstallService(serviceName string, serviceDisplayName string) error {
-	// Kopírování souboru
-	if err := copyExecutable(); err != nil {
-		return err
-	}
-
-	m, err := mgr.Connect()
-	if err != nil {
-		return err
-	}
-	defer m.Disconnect()
-
-	exePath := filepath.Join(targetDir, targetExeName)
-
-	// zjistit jesli služba není zaregistrována
-	s, err := m.OpenService(serviceName)
-	if err == nil {
-		// Služba existuje
-		s.Close()
-		log.Printf("Služba %s existuje, spouštím ji", serviceName)
-
-		time.Sleep(5 * time.Second)
-
-		// Pokusit se spustit existující službu
-		existingService, err := m.OpenService(serviceName)
-		if err == nil {
-			defer existingService.Close()
-			err = existingService.Start()
-			if err != nil {
-				log.Printf("Varování při spouštění existující služby: %v", err)
-			}
-		}
-		return nil
-	}
-
-	// služba neexistuje
-
-	// Vytvoření služby a získání handleru
-	s, err = m.CreateService(
-		serviceName,
-		exePath,
-		mgr.Config{
-			DisplayName:      serviceDisplayName,
-			StartType:        mgr.StartAutomatic,
-			ServiceStartName: "LocalSystem", // Explicitně nastavit account
-		},
-	)
-
-	if err != nil {
-		log.Fatalln("chyba při vytváření handleru služby:", err)
-		return err
-	}
-
-	defer s.Close()
-
-	log.Printf("Služba %s byla úspěšně vytvořena", serviceName)
-
-	// Spuštění služby s retry logikou
-	for i := 0; i < 3; i++ {
-		err = s.Start()
-		if err == nil {
-			log.Printf("Služba %s byla úspěšně spuštěna", serviceName)
-			break
-		}
-		log.Printf("Pokus %d/3 spuštění služby selhal: %v", i+1, err)
-		time.Sleep(time.Duration(i+1) * time.Second)
-		if i == 2 {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func copyExecutable() error {
 	// Získat cestu k aktuálnímu spustitelnému souboru
 	sourcePath, err := filepath.Abs(os.Args[0])
@@ -198,13 +235,20 @@ func copyExecutable() error {
 		return fmt.Errorf("chyba při získávání cesty k souboru: %v", err)
 	}
 
+	// pokud cílový adresář exituje, tak smazate
+	if _, err := os.Stat(consts.TargetDir); err == nil {
+		if err := os.RemoveAll(consts.TargetDir); err != nil {
+			return fmt.Errorf("chyba při smazání adresáře: %v", err)
+		}
+	}
+
 	// Vytvořit cílový adresář
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	if err := os.MkdirAll(consts.TargetDir, 0755); err != nil {
 		return fmt.Errorf("chyba při vytváření adresáře: %v", err)
 	}
 
 	// Sestavit cílovou cestu
-	targetPath := filepath.Join(targetDir, targetExeName)
+	targetPath := filepath.Join(consts.TargetDir, consts.TargetExeName)
 
 	// Zkopírovat soubor
 	input, err := os.ReadFile(sourcePath)
