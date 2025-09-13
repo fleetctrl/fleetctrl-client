@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -31,7 +30,6 @@ type AuthTransport struct {
 func InitHTTPClient(as *AuthService, tokens *Tokens, onRefresh func(Tokens)) {
 	// Underlying transport with TLS verify disabled to match existing utils.Get/Put behavior.
 	base := &http.Transport{
-		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
 		DisableKeepAlives: true, // reduce risk of implicit retries with reused headers
 	}
 	tr := &AuthTransport{
