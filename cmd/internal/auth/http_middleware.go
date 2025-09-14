@@ -1,6 +1,7 @@
 package auth
 
 import (
+	consts "KiskaLE/RustDesk-ID/cmd/internal/const"
 	"context"
 	"encoding/json"
 	"errors"
@@ -251,6 +252,7 @@ func (t *AuthTransport) setAuthHeaders(req *http.Request, accessToken string) {
 	if accessToken == "" {
 		return
 	}
+	req.Header.Set("X-Client-Version", consts.Version)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	// Adjust iat by observed server skew
 	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
