@@ -1,7 +1,7 @@
 package consts
 
 const (
-	Version            = "0.2.2"
+	Version            = "0.3.0"
 	Production         = true
 	ServiceName        = "fleetctrl-client"
 	ServiceDisplayName = "fleetctrl client"
