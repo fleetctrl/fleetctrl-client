@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/registry"
@@ -30,6 +31,10 @@ type Task struct {
 
 type SetPasswordTask struct {
 	Password string `json:"password"`
+}
+
+type SetNetworkStringTask struct {
+	NetworkString string `json:"networkString"`
 }
 
 type MainService struct {
@@ -158,17 +163,17 @@ func (ms *MainService) startRustDeskServerTasks() {
 		}
 		tasks := data.Tasks
 
-		for i := 0; i < len(tasks); i++ {
+		for i := range tasks {
 			task := tasks[i]
-			// set task started
-			utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
-				"status": "IN_PROGRESS",
-				"error":  "",
-			}, map[string]string{
-				"Content-Type": "application/json",
-			})
 			switch task.Task {
 			case "SET_PASSWD":
+				// set task started
+				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+					"status": "IN_PROGRESS",
+					"error":  "",
+				}, map[string]string{
+					"Content-Type": "application/json",
+				})
 				var d SetPasswordTask
 				if err := json.Unmarshal(task.TaskData, &d); err != nil {
 					log.Println(err)
@@ -190,6 +195,43 @@ func (ms *MainService) startRustDeskServerTasks() {
 					break
 				}
 				log.Println("Password set")
+
+				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+					"status": "SUCCESS",
+					"error":  "",
+				}, map[string]string{
+					"Content-Type": "application/json",
+				})
+
+			case "SET_NETWORK_STRING":
+				// set task started
+				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+					"status": "IN_PROGRESS",
+					"error":  "",
+				}, map[string]string{
+					"Content-Type": "application/json",
+				})
+				var d SetNetworkStringTask
+				if err := json.Unmarshal(task.TaskData, &d); err != nil {
+					log.Println(err)
+				}
+				cleanString := strings.TrimLeft(d.NetworkString, "=")
+				// set network using powershell
+				cmd := exec.Command("powershell", "-Command", "& 'C:\\Program Files\\RustDesk\\RustDesk.exe' --config "+cleanString)
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				err := cmd.Run()
+				if err != nil {
+					log.Println(err)
+					utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+						"status": "ERROR",
+						"error":  err.Error(),
+					}, map[string]string{
+						"Content-Type": "application/json",
+					})
+					break
+				}
+				log.Println("Network string set")
 
 				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 					"status": "SUCCESS",
