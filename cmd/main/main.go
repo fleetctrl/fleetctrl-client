@@ -49,15 +49,11 @@ func (ms *MainService) startRustDeskServerSync() {
 		rustdeskID, err := utils.GetRustDeskID()
 		if err != nil {
 			log.Println(err)
-			time.Sleep(15 * time.Minute)
-			continue
 		}
 		// get PC name
 		computerName, err := utils.GetComputerName()
 		if err != nil {
 			log.Println(err)
-			time.Sleep(15 * time.Minute)
-			continue
 		}
 		// get PC IP
 		computerIP, err := utils.GetComputerIP()
