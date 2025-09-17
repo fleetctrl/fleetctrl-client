@@ -154,7 +154,7 @@ func (ms *MainService) startRustDeskServerTasks() {
 		}
 		tasks := data.Tasks
 
-		for i := 0; i < len(tasks); i++ {
+		for i := range tasks {
 			task := tasks[i]
 			// set task started
 			utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
