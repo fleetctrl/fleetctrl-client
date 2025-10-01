@@ -172,7 +172,7 @@ func fingerprintBoardAndMAC(
 }
 
 func GetComputerFingerprint() string {
-	hash, _ := fingerprintBoardAndMAC("my-app-v1", true, false)
+	hash, _ := fingerprintBoardAndMAC("my-app-v1", false, false)
 
 	return hash
 }
