@@ -1,9 +1,9 @@
 package main
 
 import (
-	"KiskaLE/RustDesk-ID/cmd/internal/auth"
-	consts "KiskaLE/RustDesk-ID/cmd/internal/const"
-	"KiskaLE/RustDesk-ID/cmd/internal/utils"
+	"KiskaLE/RustDesk-ID/internal/auth"
+	consts "KiskaLE/RustDesk-ID/internal/const"
+	"KiskaLE/RustDesk-ID/internal/utils"
 	"errors"
 	"fmt"
 	"log"
