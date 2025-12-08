@@ -38,15 +38,15 @@ func (as *AuthService) Enroll(enrollToken string) (Tokens, error) {
 	// check connection to server
 	ping, err := utils.Ping(as.serverURL)
 	if err != nil {
-		log.Printf("chyba při kontrole připojení k serveru: %v", err)
+		log.Printf("error checking connection to server: %v", err)
 		return Tokens{}, err
 	}
 	for !ping {
-		log.Println("Server není dostupný. Čekám 1 minutu na další pokus...")
+		log.Println("Server is unreachable. Waiting 1 minute for next attempt...")
 		time.Sleep(1 * time.Minute)
 		ping, err = utils.Ping(as.serverURL)
 		if err != nil {
-			log.Printf("chyba při kontrole připojení k serveru: %v", err)
+			log.Printf("error checking connection to server: %v", err)
 			return Tokens{}, err
 		}
 	}
@@ -75,14 +75,14 @@ func (as *AuthService) Enroll(enrollToken string) (Tokens, error) {
 	}
 
 	if res.StatusCode != 201 {
-		return Tokens{}, errors.New("POST chyba pri registrace počítače")
+		return Tokens{}, errors.New("POST error during computer registration")
 	}
 
 	type EnrollResponse struct {
 		Tokens Tokens `json:"tokens"`
 	}
 
-	// TODO get jwk frm response
+	// TODO get jwk from response
 	var jwk EnrollResponse
 	if err := json.NewDecoder(res.Body).Decode(&jwk); err != nil {
 		return Tokens{}, err
@@ -140,7 +140,7 @@ func (as *AuthService) RefreshTokens(refreshToken string) (Tokens, error) {
 	}
 
 	if res.StatusCode != 200 {
-		return Tokens{}, errors.New("POST chyba pri aktualizování tokenu")
+		return Tokens{}, errors.New("POST error during token update")
 	}
 
 	var resTokens RefreshResponse
@@ -160,7 +160,7 @@ func (as *AuthService) RecoverTokens() (Tokens, error) {
 
 	url := as.serverURL + "/token/recover"
 
-	// Build DPoP for POST without access token (no ath)
+	// Build DPoP for POST without access token (no auth)
 	dpop, _, err := CreateDPoPAtWithJTI("POST", url, "", time.Now())
 	if err != nil {
 		return Tokens{}, err
@@ -174,7 +174,7 @@ func (as *AuthService) RecoverTokens() (Tokens, error) {
 		return Tokens{}, err
 	}
 	if res.StatusCode != 200 {
-		return Tokens{}, errors.New("POST chyba pri obnoveni tokenu pres recover")
+		return Tokens{}, errors.New("POST error during token recovery")
 	}
 
 	var payload RecoverResponse
