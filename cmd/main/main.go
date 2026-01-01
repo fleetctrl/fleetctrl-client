@@ -65,15 +65,16 @@ type ReleaseRequirement struct {
 }
 
 type AssignedRelease struct {
-	ID             string               `json:"id"`
-	Version        string               `json:"version"`
-	AssignType     string               `json:"assign_type"`
-	Action         string               `json:"action"`
-	InstallerType  string               `json:"installer_type"`
-	Win32          *Win32Release        `json:"win32,omitempty"`
-	Winget         *WingetRelease       `json:"winget,omitempty"`
-	DetectionRules []DetectionRule      `json:"detection_rules,omitempty"`
-	Requirements   []ReleaseRequirement `json:"requirements,omitempty"`
+	ID                string               `json:"id"`
+	Version           string               `json:"version"`
+	AssignType        string               `json:"assign_type"`
+	Action            string               `json:"action"`
+	InstallerType     string               `json:"installer_type"`
+	UninstallPrevious bool                 `json:"uninstall_previous"`
+	Win32             *Win32Release        `json:"win32,omitempty"`
+	Winget            *WingetRelease       `json:"winget,omitempty"`
+	DetectionRules    []DetectionRule      `json:"detection_rules,omitempty"`
+	Requirements      []ReleaseRequirement `json:"requirements,omitempty"`
 }
 
 type AssignedApp struct {
@@ -326,6 +327,36 @@ func (ms *MainService) startApplicationsManagement() {
 			switch newestRelease.AssignType {
 			case "install":
 				// check if application is installed
+				appInstalled, err := isAppInstalled(newestRelease.DetectionRules)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				if appInstalled {
+					continue
+				}
+
+				// application is not installed
+				// install application
+				if newestRelease.UninstallPrevious {
+					// uninstall previous versions
+					for _, release := range app.Releases {
+						if release.Version == newestRelease.Version {
+							continue
+						}
+						isAppInstalled, err := isAppInstalled(release.DetectionRules)
+						if err != nil {
+							log.Println(err)
+							continue
+						}
+						if isAppInstalled {
+							log.Println("Previous version is installed, uninstalling...")
+							// uninstall previous version
+
+						}
+					}
+				}
+
 			case "uninstall":
 				// check if application is unisntalled
 			}
@@ -336,14 +367,196 @@ func (ms *MainService) startApplicationsManagement() {
 
 }
 
-func isAppInstalled(appName string, detectionType string) (bool, error) {
-	switch detectionType {
-	case "winget":
+// checkDetectionRule checks a single detection rule and returns whether it passes
+// Config structure: { "version": "1", "operator": string, "path": string, "value": string }
+// Types: "file", "registry"
+// File operators: exists, version_equal, version_equal_or_higher, version_equal_or_lower, version_higher, version_lower
+// Registry operators: exists, string, version_equal, version_equal_or_higher, version_equal_or_lower, version_higher, version_lower
+func checkDetectionRule(rule DetectionRule) (bool, error) {
+	path, _ := rule.Config["path"].(string)
+	value, _ := rule.Config["value"].(string)
+	operator, _ := rule.Config["operator"].(string)
 
-	case "win32":
+	switch rule.Type {
+	case "file":
+		if path == "" {
+			return false, fmt.Errorf("file: missing 'path' in config")
+		}
 
+		switch operator {
+		case "exists":
+			_, err := os.Stat(path)
+			return err == nil, nil
+
+		case "version_equal", "version_equal_or_higher", "version_equal_or_lower", "version_higher", "version_lower":
+			if value == "" {
+				return false, fmt.Errorf("file version check: missing 'value' in config")
+			}
+			// Get file version using PowerShell
+			cmd := exec.Command("powershell", "-NoProfile", "-Command",
+				fmt.Sprintf(`(Get-Item '%s').VersionInfo.FileVersion`, path))
+			output, err := cmd.Output()
+			if err != nil {
+				return false, nil // File doesn't exist or has no version
+			}
+			fileVersion := strings.TrimSpace(string(output))
+			if fileVersion == "" {
+				return false, nil
+			}
+			cmp := compareVersions(fileVersion, value)
+
+			switch operator {
+			case "version_equal":
+				return cmp == 0, nil
+			case "version_equal_or_higher":
+				return cmp >= 0, nil
+			case "version_equal_or_lower":
+				return cmp <= 0, nil
+			case "version_higher":
+				return cmp > 0, nil
+			case "version_lower":
+				return cmp < 0, nil
+			}
+		default:
+			return false, fmt.Errorf("file: unknown operator '%s'", operator)
+		}
+
+	case "registry":
+		if path == "" {
+			return false, fmt.Errorf("registry: missing 'path' in config")
+		}
+
+		hive, keyPath := parseRegistryPath(path)
+
+		switch operator {
+		case "exists":
+			key, err := registry.OpenKey(hive, keyPath, registry.QUERY_VALUE)
+			if err == nil {
+				key.Close()
+				return true, nil
+			}
+			return false, nil
+
+		case "string":
+			// Check if registry value equals the expected string
+			// Path format: HKLM\...\KeyName\ValueName
+			lastBackslash := strings.LastIndex(keyPath, "\\")
+			if lastBackslash == -1 {
+				return false, fmt.Errorf("registry string: invalid path format, expected key\\valueName")
+			}
+			regKeyPath := keyPath[:lastBackslash]
+			valueName := keyPath[lastBackslash+1:]
+
+			key, err := registry.OpenKey(hive, regKeyPath, registry.QUERY_VALUE)
+			if err != nil {
+				return false, nil
+			}
+			defer key.Close()
+			val, _, err := key.GetStringValue(valueName)
+			if err != nil {
+				return false, nil
+			}
+			return val == value, nil
+
+		case "version_equal", "version_equal_or_higher", "version_equal_or_lower", "version_higher", "version_lower":
+			// Compare registry value as version
+			lastBackslash := strings.LastIndex(keyPath, "\\")
+			if lastBackslash == -1 {
+				return false, fmt.Errorf("registry version: invalid path format")
+			}
+			regKeyPath := keyPath[:lastBackslash]
+			valueName := keyPath[lastBackslash+1:]
+
+			key, err := registry.OpenKey(hive, regKeyPath, registry.QUERY_VALUE)
+			if err != nil {
+				return false, nil
+			}
+			defer key.Close()
+			val, _, err := key.GetStringValue(valueName)
+			if err != nil {
+				return false, nil
+			}
+
+			cmp := compareVersions(val, value)
+			switch operator {
+			case "version_equal":
+				return cmp == 0, nil
+			case "version_equal_or_higher":
+				return cmp >= 0, nil
+			case "version_equal_or_lower":
+				return cmp <= 0, nil
+			case "version_higher":
+				return cmp > 0, nil
+			case "version_lower":
+				return cmp < 0, nil
+			}
+
+		default:
+			return false, fmt.Errorf("registry: unknown operator '%s'", operator)
+		}
+
+	default:
+		return false, fmt.Errorf("unknown detection type: %s", rule.Type)
 	}
+
 	return false, nil
+}
+
+// parseRegistryPath parses a registry path into hive and key path
+func parseRegistryPath(path string) (registry.Key, string) {
+	path = strings.ReplaceAll(path, "/", "\\")
+	if strings.HasPrefix(path, "HKLM\\") || strings.HasPrefix(path, "HKEY_LOCAL_MACHINE\\") {
+		return registry.LOCAL_MACHINE, strings.TrimPrefix(strings.TrimPrefix(path, "HKLM\\"), "HKEY_LOCAL_MACHINE\\")
+	}
+	if strings.HasPrefix(path, "HKCU\\") || strings.HasPrefix(path, "HKEY_CURRENT_USER\\") {
+		return registry.CURRENT_USER, strings.TrimPrefix(strings.TrimPrefix(path, "HKCU\\"), "HKEY_CURRENT_USER\\")
+	}
+	if strings.HasPrefix(path, "HKCR\\") || strings.HasPrefix(path, "HKEY_CLASSES_ROOT\\") {
+		return registry.CLASSES_ROOT, strings.TrimPrefix(strings.TrimPrefix(path, "HKCR\\"), "HKEY_CLASSES_ROOT\\")
+	}
+	return registry.LOCAL_MACHINE, path
+}
+
+// compareVersions compares two version strings, returns -1, 0, or 1
+func compareVersions(v1, v2 string) int {
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+	maxLen := max(len(parts2), len(parts1))
+	for i := range maxLen {
+		var n1, n2 int
+		if i < len(parts1) {
+			fmt.Sscanf(parts1[i], "%d", &n1)
+		}
+		if i < len(parts2) {
+			fmt.Sscanf(parts2[i], "%d", &n2)
+		}
+		if n1 < n2 {
+			return -1
+		}
+		if n1 > n2 {
+			return 1
+		}
+	}
+	return 0
+}
+
+// isAppInstalled checks if an application is installed based on detection rules
+func isAppInstalled(rules []DetectionRule) (bool, error) {
+	if len(rules) == 0 {
+		return false, nil
+	}
+	// All rules must pass for the app to be considered installed
+	for _, rule := range rules {
+		passed, err := checkDetectionRule(rule)
+		if err != nil {
+			log.Printf("Detection rule error (%s): %v", rule.Type, err)
+			return false, err
+		}
+		if !passed {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
