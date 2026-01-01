@@ -228,6 +228,80 @@ func takeOwnershipAndDelete(path string) error {
 	return nil
 }
 
+func UpdateService() error {
+	fmt.Println("Zahajuji aktualizaci služby...")
+
+	// Připojení ke správci služeb
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("chyba při připojení ke správci služeb: %v", err)
+	}
+	defer m.Disconnect()
+
+	// Otevření služby
+	s, err := m.OpenService(consts.ServiceName)
+	if err != nil {
+		return fmt.Errorf("služba %s neexistuje: %v", consts.ServiceName, err)
+	}
+	defer s.Close()
+
+	// Zastavit službu pokud běží
+	status, err := s.Query()
+	if err != nil {
+		return fmt.Errorf("chyba při dotazování na stav služby: %v", err)
+	}
+
+	if status.State == svc.Running {
+		fmt.Println("Zastavuji běžící službu...")
+		_, err = s.Control(svc.Stop)
+		if err != nil {
+			return fmt.Errorf("chyba při zastavování služby: %v", err)
+		}
+
+		// Počkat na zastavení služby
+		for i := 0; i < 30; i++ {
+			time.Sleep(1 * time.Second)
+			status, err := s.Query()
+			if err != nil || status.State == svc.Stopped {
+				break
+			}
+		}
+		fmt.Println("Služba byla zastavena.")
+	}
+
+	// Krátká pauza pro uvolnění souborů
+	time.Sleep(2 * time.Second)
+
+	// Zkopírovat nový executable
+	if err := copyExecutable(); err != nil {
+		return fmt.Errorf("chyba při kopírování souboru: %v", err)
+	}
+
+	// Aktualizovat verzi v registru
+	var versionKey = RegistryValue{Type: RegistryString, Value: consts.Version}
+	key, err := SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
+	if err != nil {
+		fmt.Printf("Varování: chyba při aktualizaci verze v registru: %v\n", err)
+	} else {
+		key.Close()
+	}
+
+	// Spustit službu znovu
+	fmt.Println("Spouštím službu...")
+	for i := 0; i < 3; i++ {
+		err = s.Start()
+		if err == nil {
+			fmt.Printf("Služba %s byla úspěšně aktualizována a spuštěna.\n", consts.ServiceName)
+			fmt.Printf("Nová verze: %s\n", consts.Version)
+			return nil
+		}
+		fmt.Printf("Pokus %d/3 spuštění služby selhal: %v\n", i+1, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+
+	return fmt.Errorf("službu se nepodařilo spustit po aktualizaci: %v", err)
+}
+
 func copyExecutable() error {
 	// Získat cestu k aktuálnímu spustitelnému souboru
 	sourcePath, err := filepath.Abs(os.Args[0])

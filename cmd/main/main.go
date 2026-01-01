@@ -37,6 +37,52 @@ type SetNetworkStringTask struct {
 	NetworkString string `json:"networkString"`
 }
 
+type Win32Release struct {
+	InstallBinaryPath   string `json:"install_binary_path"`
+	Hash                string `json:"hash"`
+	InstallScript       string `json:"install_script"`
+	UninstallScript     string `json:"uninstall_script"`
+	InstallBinarySize   int64  `json:"install_binary_size"`
+	InstallBinaryBucket string `json:"install_binary_bucket"`
+}
+
+type WingetRelease struct {
+	WingetID string `json:"winget_id"`
+}
+
+type DetectionRule struct {
+	Type   string                 `json:"type"`
+	Config map[string]interface{} `json:"config"`
+}
+
+type ReleaseRequirement struct {
+	TimeoutSeconds int64  `json:"timeout_seconds"`
+	RunAsSystem    bool   `json:"run_as_system"`
+	StoragePath    string `json:"storage_path"`
+	Hash           string `json:"hash"`
+	Bucket         string `json:"bucket"`
+	ByteSize       int64  `json:"byte_size"`
+}
+
+type AssignedRelease struct {
+	ID             string               `json:"id"`
+	Version        string               `json:"version"`
+	AssignType     string               `json:"assign_type"`
+	Action         string               `json:"action"`
+	InstallerType  string               `json:"installer_type"`
+	Win32          *Win32Release        `json:"win32,omitempty"`
+	Winget         *WingetRelease       `json:"winget,omitempty"`
+	DetectionRules []DetectionRule      `json:"detection_rules,omitempty"`
+	Requirements   []ReleaseRequirement `json:"requirements,omitempty"`
+}
+
+type AssignedApp struct {
+	ID          string            `json:"id"`
+	DisplayName string            `json:"display_name"`
+	Publisher   string            `json:"publisher"`
+	Releases    []AssignedRelease `json:"releases"`
+}
+
 type MainService struct {
 	as        *auth.AuthService
 	serverURL string
@@ -251,14 +297,53 @@ func (ms *MainService) startApplicationsManagement() {
 	log.Println("Starting applications management...")
 	for {
 		// get asigned applications
+		appsResponse, err := utils.Get(ms.serverURL+"/apps/assigned", map[string]string{
+			"Content-Type": "application/json",
+		})
+		if err != nil {
+			log.Println(err)
+			time.Sleep(15 * time.Minute)
+			continue
+		}
+		if appsResponse.StatusCode != 200 {
+			// parse body
+			log.Println("Server returned error: ", appsResponse.StatusCode)
+			time.Sleep(15 * time.Minute)
+			continue
+		}
+		type AssignedAppsResponse struct {
+			Apps []AssignedApp `json:"apps"`
+		}
+		var assignedAppsResponse AssignedAppsResponse
+		if err := json.NewDecoder(appsResponse.Body).Decode(&assignedAppsResponse); err != nil {
+			log.Println(err)
+			time.Sleep(15 * time.Minute)
+			continue
+		}
 
-		// check if application is installed
-
-		// install applications or remove applications or update aplications
+		for _, app := range assignedAppsResponse.Apps {
+			newestRelease := app.Releases[0]
+			switch newestRelease.AssignType {
+			case "install":
+				// check if application is installed
+			case "uninstall":
+				// check if application is unisntalled
+			}
+		}
 
 		time.Sleep(15 * time.Minute)
 	}
 
+}
+
+func isAppInstalled(appName string, detectionType string) (bool, error) {
+	switch detectionType {
+	case "winget":
+
+	case "win32":
+
+	}
+	return false, nil
 }
 
 func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
@@ -407,6 +492,12 @@ func main() {
 			return
 		case "remove":
 			err := RemoveService()
+			if err != nil {
+				panic(err)
+			}
+			return
+		case "update":
+			err := UpdateService()
 			if err != nil {
 				panic(err)
 			}
