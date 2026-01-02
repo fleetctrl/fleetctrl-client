@@ -7,15 +7,41 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 )
+
+// getWingetPath finds the full path to winget.exe
+// When running as SYSTEM, winget is not in PATH, so we need to find it in WindowsApps folder
+func getWingetPath() (string, error) {
+	programFilesPath := os.Getenv("ProgramW6432")
+	if programFilesPath == "" {
+		programFilesPath = "C:\\Program Files"
+	}
+
+	windowsAppsPath := filepath.Join(programFilesPath, "WindowsApps")
+	pattern := filepath.Join(windowsAppsPath, "Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe", "winget.exe")
+
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", fmt.Errorf("error searching for winget: %v", err)
+	}
+
+	if len(matches) == 0 {
+		return "", fmt.Errorf("winget.exe not found in WindowsApps folder")
+	}
+
+	// Return the first match (should be the installed version)
+	return matches[0], nil
+}
 
 type serviceHandler struct {
 	ms *MainService
@@ -324,7 +350,11 @@ func (ms *MainService) startApplicationsManagement() {
 
 		for _, app := range assignedAppsResponse.Apps {
 			newestRelease := app.Releases[0]
-			switch newestRelease.AssignType {
+			if newestRelease.AssignType == "exclude" {
+				continue
+			}
+
+			switch newestRelease.Action {
 			case "install":
 				// check if application is installed
 				appInstalled, err := isAppInstalled(newestRelease.DetectionRules)
@@ -351,20 +381,239 @@ func (ms *MainService) startApplicationsManagement() {
 						}
 						if isAppInstalled {
 							log.Println("Previous version is installed, uninstalling...")
-							// uninstall previous version
-
+							if err := uninstallApp(release); err != nil {
+								log.Printf("Failed to uninstall previous version: %v", err)
+							}
+							break
 						}
 					}
 				}
 
+				err = installApp(newestRelease, ms.serverURL)
+				if err != nil {
+					log.Printf("Failed to install app: %v", err)
+				}
+
 			case "uninstall":
 				// check if application is unisntalled
+				appInstalled, err := isAppInstalled(newestRelease.DetectionRules)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				if !appInstalled {
+					continue
+				}
+
+				// application is installed
+				// uninstall application
+				for _, release := range app.Releases {
+					isAppInstalled, err := isAppInstalled(release.DetectionRules)
+					if err != nil {
+						log.Println(err)
+						continue
+					}
+					if isAppInstalled {
+						log.Println("Previous version is installed, uninstalling...")
+						if err := uninstallApp(release); err != nil {
+							log.Printf("Failed to uninstall previous version: %v", err)
+						}
+						break
+					}
+				}
 			}
 		}
 
 		time.Sleep(15 * time.Minute)
 	}
 
+}
+
+// uninstallApp uninstalls an application based on its release type
+func uninstallApp(release AssignedRelease) error {
+	switch release.InstallerType {
+	case "win32":
+		if release.Win32 == nil {
+			return fmt.Errorf("win32 release data is missing")
+		}
+		if release.Win32.UninstallScript == "" {
+			return fmt.Errorf("uninstall script is missing for win32 release")
+		}
+
+		log.Printf("Uninstalling win32 app (version %s) using script...", release.Version)
+
+		// Run uninstall script using PowerShell
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", release.Win32.UninstallScript)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("uninstall script failed: %v", err)
+		}
+
+		log.Printf("Successfully uninstalled win32 app (version %s)", release.Version)
+		return nil
+
+	case "winget":
+		if release.Winget == nil {
+			return fmt.Errorf("winget release data is missing")
+		}
+		if release.Winget.WingetID == "" {
+			return fmt.Errorf("winget ID is missing")
+		}
+
+		log.Printf("Uninstalling winget app %s (version %s)...", release.Winget.WingetID, release.Version)
+
+		// Run winget uninstall via PowerShell (winget needs to run from its folder when running as SYSTEM)
+		psScript := fmt.Sprintf(`
+		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
+		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
+		Push-Location $wingetDir
+		$result = .\winget.exe uninstall --id "%s" --silent --accept-source-agreements | Out-String
+		Write-Host $result
+		$exitCode = $LASTEXITCODE
+		Pop-Location
+		exit $exitCode
+		`, release.Winget.WingetID)
+
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("winget uninstall failed: %v", err)
+		}
+
+		log.Printf("Successfully uninstalled winget app %s", release.Winget.WingetID)
+		return nil
+
+	default:
+		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
+	}
+}
+
+// installApp installs an application based on its release type
+func installApp(release AssignedRelease, serverURL string) error {
+	switch release.InstallerType {
+	case "win32":
+		if release.Win32 == nil {
+			return fmt.Errorf("win32 release data is missing")
+		}
+		if release.Win32.InstallScript == "" {
+			return fmt.Errorf("install script is missing for win32 release")
+		}
+
+		log.Printf("Installing win32 app (version %s)...", release.Version)
+
+		// Download binary from storage
+		tempDir := os.TempDir()
+		installerPath := filepath.Join(tempDir, filepath.Base(release.Win32.InstallBinaryPath))
+
+		// Download the installer binary using new endpoint
+		downloadURL := fmt.Sprintf("%s/apps/download/%s", serverURL, release.ID)
+		log.Printf("Downloading installer from: %s", downloadURL)
+
+		resp, err := utils.Get(downloadURL, map[string]string{})
+		if err != nil {
+			return fmt.Errorf("failed to download installer: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("failed to download installer: HTTP %d", resp.StatusCode)
+		}
+
+		// Create installer file
+		installerFile, err := os.Create(installerPath)
+		if err != nil {
+			return fmt.Errorf("failed to create installer file: %v", err)
+		}
+
+		// Copy response body to file
+		_, err = io.Copy(installerFile, resp.Body)
+		installerFile.Close()
+		if err != nil {
+			os.Remove(installerPath)
+			return fmt.Errorf("failed to write installer file: %v", err)
+		}
+
+		// Verify hash
+		if release.Win32.Hash != "" {
+			fileHash, err := utils.CalculateFileHash(installerPath)
+			if err != nil {
+				os.Remove(installerPath)
+				return fmt.Errorf("failed to calculate file hash: %v", err)
+			}
+			if !strings.EqualFold(fileHash, release.Win32.Hash) {
+				os.Remove(installerPath)
+				return fmt.Errorf("hash mismatch: expected %s, got %s", release.Win32.Hash, fileHash)
+			}
+			log.Println("Hash verified successfully")
+		}
+
+		// Run install script using PowerShell
+		// Replace placeholder in script with actual installer path
+		installScript := strings.ReplaceAll(release.Win32.InstallScript, "{{INSTALLER_PATH}}", installerPath)
+
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", installScript)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			os.Remove(installerPath)
+			return fmt.Errorf("install script failed: %v", err)
+		}
+
+		// Cleanup installer
+		os.Remove(installerPath)
+
+		log.Printf("Successfully installed win32 app (version %s)", release.Version)
+		return nil
+
+	case "winget":
+		if release.Winget == nil {
+			return fmt.Errorf("winget release data is missing")
+		}
+		if release.Winget.WingetID == "" {
+			return fmt.Errorf("winget ID is missing")
+		}
+
+		log.Printf("Installing winget app %s (version %s)...", release.Winget.WingetID, release.Version)
+
+		// Build winget arguments
+		wingetArgs := fmt.Sprintf(`--id "%s" --silent --accept-package-agreements --accept-source-agreements`, release.Winget.WingetID)
+		if release.Version != "" && release.Version != "latest" {
+			wingetArgs += fmt.Sprintf(` --version "%s"`, release.Version)
+		}
+
+		// Run winget install via PowerShell (winget needs to run from its folder when running as SYSTEM)
+		psScript := fmt.Sprintf(`
+		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
+		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
+		Push-Location $wingetDir
+		$result = .\winget.exe install %s | Out-String
+		Write-Host $result
+		$exitCode = $LASTEXITCODE
+		Pop-Location
+		exit $exitCode
+		`, wingetArgs)
+
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("winget install failed: %v", err)
+		}
+
+		log.Printf("Successfully installed winget app %s", release.Winget.WingetID)
+		return nil
+
+	default:
+		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
+	}
 }
 
 // checkDetectionRule checks a single detection rule and returns whether it passes

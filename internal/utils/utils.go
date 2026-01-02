@@ -1,10 +1,14 @@
 package utils
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/joho/godotenv"
 )
@@ -63,4 +67,20 @@ func Ping(host string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// CalculateFileHash calculates the SHA256 hash of a file
+func CalculateFileHash(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("failed to calculate hash: %v", err)
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
