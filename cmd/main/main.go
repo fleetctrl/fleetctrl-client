@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -357,12 +358,12 @@ func (ms *MainService) startApplicationsManagement() {
 			switch newestRelease.Action {
 			case "install":
 				// check if application is installed
-				appInstalled, err := isAppInstalled(newestRelease.DetectionRules)
+				installed, err := isAppInstalled(newestRelease)
 				if err != nil {
 					log.Println(err)
 					continue
 				}
-				if appInstalled {
+				if installed {
 					continue
 				}
 
@@ -374,12 +375,12 @@ func (ms *MainService) startApplicationsManagement() {
 						if release.Version == newestRelease.Version {
 							continue
 						}
-						isAppInstalled, err := isAppInstalled(release.DetectionRules)
+						installed, err := isAppInstalled(release)
 						if err != nil {
 							log.Println(err)
 							continue
 						}
-						if isAppInstalled {
+						if installed {
 							log.Println("Previous version is installed, uninstalling...")
 							if err := uninstallApp(release); err != nil {
 								log.Printf("Failed to uninstall previous version: %v", err)
@@ -396,24 +397,24 @@ func (ms *MainService) startApplicationsManagement() {
 
 			case "uninstall":
 				// check if application is unisntalled
-				appInstalled, err := isAppInstalled(newestRelease.DetectionRules)
+				installed, err := isAppInstalled(newestRelease)
 				if err != nil {
 					log.Println(err)
 					continue
 				}
-				if !appInstalled {
+				if !installed {
 					continue
 				}
 
 				// application is installed
 				// uninstall application
 				for _, release := range app.Releases {
-					isAppInstalled, err := isAppInstalled(release.DetectionRules)
+					installed, err := isAppInstalled(release)
 					if err != nil {
 						log.Println(err)
 						continue
 					}
-					if isAppInstalled {
+					if installed {
 						log.Println("Previous version is installed, uninstalling...")
 						if err := uninstallApp(release); err != nil {
 							log.Printf("Failed to uninstall previous version: %v", err)
@@ -790,12 +791,50 @@ func compareVersions(v1, v2 string) int {
 }
 
 // isAppInstalled checks if an application is installed based on detection rules
-func isAppInstalled(rules []DetectionRule) (bool, error) {
-	if len(rules) == 0 {
+func isAppInstalled(release AssignedRelease) (bool, error) {
+	// If it's a winget app, we can automatically check by ID and version
+	if release.InstallerType == "winget" && release.Winget != nil && release.Winget.WingetID != "" {
+		log.Printf("Checking winget app %s (version %s)...", release.Winget.WingetID, release.Version)
+
+		// PowerShell script to get the version of the installed winget app
+		psScript := fmt.Sprintf(`
+		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+		if (-not $wingetDir) { exit 1 }
+		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
+		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
+		Push-Location $wingetDir
+		$output = .\winget.exe list --id "%s" --exact --accept-source-agreements --source winget 2>$null | Out-String
+		Pop-Location
+		if ($output -match '%s\s+([^\s]+)') {
+			Write-Host $matches[1]
+		}
+		`, release.Winget.WingetID, regexp.QuoteMeta(release.Winget.WingetID))
+
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		output, err := cmd.Output()
+		if err == nil {
+			installedVersion := strings.TrimSpace(string(output))
+			if installedVersion != "" {
+				// If version is specified, we check it
+				if release.Version != "" && release.Version != "latest" {
+					return compareVersions(installedVersion, release.Version) == 0, nil
+				}
+				// Otherwise just being listed is enough
+				return true, nil
+			}
+		}
+		// If winget check fails and no other rules, return false
+		if len(release.DetectionRules) == 0 {
+			return false, nil
+		}
+	}
+
+	if len(release.DetectionRules) == 0 {
 		return false, nil
 	}
+
 	// All rules must pass for the app to be considered installed
-	for _, rule := range rules {
+	for _, rule := range release.DetectionRules {
 		passed, err := checkDetectionRule(rule)
 		if err != nil {
 			log.Printf("Detection rule error (%s): %v", rule.Type, err)
