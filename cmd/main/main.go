@@ -108,6 +108,7 @@ type AssignedApp struct {
 	ID          string            `json:"id"`
 	DisplayName string            `json:"display_name"`
 	Publisher   string            `json:"publisher"`
+	AutoUpdate  bool              `json:"auto_update"`
 	Releases    []AssignedRelease `json:"releases"`
 }
 
@@ -364,6 +365,12 @@ func (ms *MainService) startApplicationsManagement() {
 					continue
 				}
 				if installed {
+					if newestRelease.InstallerType == "winget" && newestRelease.Winget != nil && app.AutoUpdate {
+						log.Printf("Checking for updates for winget app %s...", newestRelease.Winget.WingetID)
+						if err := upgradeApp(newestRelease); err != nil {
+							log.Printf("Failed to upgrade winget app %s: %v", newestRelease.Winget.WingetID, err)
+						}
+					}
 					continue
 				}
 
@@ -627,6 +634,51 @@ func installApp(release AssignedRelease, serverURL string) error {
 
 	default:
 		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
+	}
+}
+
+// upgradeApp upgrades an application based on its release type
+func upgradeApp(release AssignedRelease) error {
+	switch release.InstallerType {
+	case "winget":
+		if release.Winget == nil {
+			return fmt.Errorf("winget release data is missing")
+		}
+		if release.Winget.WingetID == "" {
+			return fmt.Errorf("winget ID is missing")
+		}
+
+		// Run winget upgrade via PowerShell
+		psScript := fmt.Sprintf(`
+		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
+		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
+		Push-Location $wingetDir
+		$result = .\winget.exe upgrade --id "%s" --silent --accept-package-agreements --accept-source-agreements | Out-String
+		Write-Host $result
+		$exitCode = $LASTEXITCODE
+		Pop-Location
+		exit $exitCode
+		`, release.Winget.WingetID)
+
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			if exitError, ok := err.(*exec.ExitError); ok {
+				// 0x8a15002b is the exit code for "No applicable update found"
+				if uint32(exitError.ExitCode()) == 0x8a15002b {
+					return nil
+				}
+			}
+			return fmt.Errorf("winget upgrade failed: %v", err)
+		}
+
+		return nil
+
+	default:
+		return nil // Only winget supported for now
 	}
 }
 
