@@ -580,12 +580,25 @@ func installApp(release AssignedRelease, serverURL string) error {
 			return fmt.Errorf("winget ID is missing")
 		}
 
+		// Check if a higher version is already installed
+		if release.Version != "" && release.Version != "latest" {
+			installedVersion, err := getInstalledWingetVersion(release.Winget.WingetID)
+			if err == nil && installedVersion != "" {
+				if compareVersions(installedVersion, release.Version) > 0 {
+					log.Printf("Higher version (%s) of %s is already installed (requested version: %s), uninstalling first...", installedVersion, release.Winget.WingetID, release.Version)
+					if err := uninstallApp(release); err != nil {
+						return fmt.Errorf("failed to uninstall higher version before downgrade: %v", err)
+					}
+				}
+			}
+		}
+
 		log.Printf("Installing winget app %s (version %s)...", release.Winget.WingetID, release.Version)
 
 		// Build winget arguments
 		wingetArgs := fmt.Sprintf(`--id "%s" --silent --accept-package-agreements --accept-source-agreements`, release.Winget.WingetID)
 		if release.Version != "" && release.Version != "latest" {
-			wingetArgs += fmt.Sprintf(` --version "%s"`, release.Version)
+			wingetArgs += fmt.Sprintf(` -v %s`, release.Version)
 		}
 
 		// Run winget install via PowerShell (winget needs to run from its folder when running as SYSTEM)
@@ -796,33 +809,16 @@ func isAppInstalled(release AssignedRelease) (bool, error) {
 	if release.InstallerType == "winget" && release.Winget != nil && release.Winget.WingetID != "" {
 		log.Printf("Checking winget app %s (version %s)...", release.Winget.WingetID, release.Version)
 
-		// PowerShell script to get the version of the installed winget app
-		psScript := fmt.Sprintf(`
-		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-		if (-not $wingetDir) { exit 1 }
-		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
-		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
-		Push-Location $wingetDir
-		$output = .\winget.exe list --id "%s" --exact --accept-source-agreements --source winget 2>$null | Out-String
-		Pop-Location
-		if ($output -match '%s\s+([^\s]+)') {
-			Write-Host $matches[1]
-		}
-		`, release.Winget.WingetID, regexp.QuoteMeta(release.Winget.WingetID))
-
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		output, err := cmd.Output()
-		if err == nil {
-			installedVersion := strings.TrimSpace(string(output))
-			if installedVersion != "" {
-				// If version is specified, we check it
-				if release.Version != "" && release.Version != "latest" {
-					return compareVersions(installedVersion, release.Version) == 0, nil
-				}
-				// Otherwise just being listed is enough
-				return true, nil
+		installedVersion, err := getInstalledWingetVersion(release.Winget.WingetID)
+		if err == nil && installedVersion != "" {
+			// If version is specified, we check it
+			if release.Version != "" && release.Version != "latest" {
+				return compareVersions(installedVersion, release.Version) == 0, nil
 			}
+			// Otherwise just being listed is enough
+			return true, nil
 		}
+
 		// If winget check fails and no other rules, return false
 		if len(release.DetectionRules) == 0 {
 			return false, nil
@@ -845,6 +841,30 @@ func isAppInstalled(release AssignedRelease) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// getInstalledWingetVersion returns the version of the winget app if installed, otherwise an empty string
+func getInstalledWingetVersion(wingetID string) (string, error) {
+	// PowerShell script to get the version of the installed winget app
+	psScript := fmt.Sprintf(`
+	$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+	if (-not $wingetDir) { exit 1 }
+	$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
+	foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
+	Push-Location $wingetDir
+	$output = .\winget.exe list --id "%s" --exact --accept-source-agreements --source winget 2>$null | Out-String
+	Pop-Location
+	if ($output -match '%s\s+([^\s]+)') {
+		Write-Host $matches[1]
+	}
+	`, wingetID, regexp.QuoteMeta(wingetID))
+
+	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
