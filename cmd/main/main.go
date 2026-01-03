@@ -669,6 +669,7 @@ func upgradeApp(release AssignedRelease) error {
 			if exitError, ok := err.(*exec.ExitError); ok {
 				// 0x8a15002b is the exit code for "No applicable update found"
 				if uint32(exitError.ExitCode()) == 0x8a15002b {
+					log.Println("No applicable update found")
 					return nil
 				}
 			}
