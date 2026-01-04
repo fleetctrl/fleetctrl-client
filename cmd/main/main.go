@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -389,7 +388,7 @@ func (ms *MainService) startApplicationsManagement() {
 						}
 						if installed {
 							log.Println("Previous version is installed, uninstalling...")
-							if err := uninstallApp(release); err != nil {
+							if err := uninstallApp(release, ms.serverURL); err != nil {
 								log.Printf("Failed to uninstall previous version: %v", err)
 							}
 							break
@@ -423,7 +422,7 @@ func (ms *MainService) startApplicationsManagement() {
 					}
 					if installed {
 						log.Println("Previous version is installed, uninstalling...")
-						if err := uninstallApp(release); err != nil {
+						if err := uninstallApp(release, ms.serverURL); err != nil {
 							log.Printf("Failed to uninstall previous version: %v", err)
 						}
 						break
@@ -438,7 +437,8 @@ func (ms *MainService) startApplicationsManagement() {
 }
 
 // uninstallApp uninstalls an application based on its release type
-func uninstallApp(release AssignedRelease) error {
+// uninstallApp uninstalls an application based on its release type
+func uninstallApp(release AssignedRelease, serverURL string) error {
 	switch release.InstallerType {
 	case "win32":
 		if release.Win32 == nil {
@@ -450,8 +450,18 @@ func uninstallApp(release AssignedRelease) error {
 
 		log.Printf("Uninstalling win32 app (version %s) using script...", release.Version)
 
+		installerPath, executionDir, cleanup, err := prepareWin32Binary(release, serverURL, "uninstallation")
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+
 		// Run uninstall script using PowerShell
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", release.Win32.UninstallScript)
+		// Replace placeholder in script with actual binary path
+		uninstallScript := strings.ReplaceAll(release.Win32.UninstallScript, "{{INSTALLER_PATH}}", installerPath)
+
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallScript)
+		cmd.Dir = executionDir
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
 
@@ -514,67 +524,24 @@ func installApp(release AssignedRelease, serverURL string) error {
 
 		log.Printf("Installing win32 app (version %s)...", release.Version)
 
-		// Download binary from storage
-		tempDir := os.TempDir()
-		installerPath := filepath.Join(tempDir, filepath.Base(release.Win32.InstallBinaryPath))
-
-		// Download the installer binary using new endpoint
-		downloadURL := fmt.Sprintf("%s/apps/download/%s", serverURL, release.ID)
-		log.Printf("Downloading installer from: %s", downloadURL)
-
-		resp, err := utils.Get(downloadURL, map[string]string{})
+		installerPath, executionDir, cleanup, err := prepareWin32Binary(release, serverURL, "installation")
 		if err != nil {
-			return fmt.Errorf("failed to download installer: %v", err)
+			return err
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			return fmt.Errorf("failed to download installer: HTTP %d", resp.StatusCode)
-		}
-
-		// Create installer file
-		installerFile, err := os.Create(installerPath)
-		if err != nil {
-			return fmt.Errorf("failed to create installer file: %v", err)
-		}
-
-		// Copy response body to file
-		_, err = io.Copy(installerFile, resp.Body)
-		installerFile.Close()
-		if err != nil {
-			os.Remove(installerPath)
-			return fmt.Errorf("failed to write installer file: %v", err)
-		}
-
-		// Verify hash
-		if release.Win32.Hash != "" {
-			fileHash, err := utils.CalculateFileHash(installerPath)
-			if err != nil {
-				os.Remove(installerPath)
-				return fmt.Errorf("failed to calculate file hash: %v", err)
-			}
-			if !strings.EqualFold(fileHash, release.Win32.Hash) {
-				os.Remove(installerPath)
-				return fmt.Errorf("hash mismatch: expected %s, got %s", release.Win32.Hash, fileHash)
-			}
-			log.Println("Hash verified successfully")
-		}
+		defer cleanup()
 
 		// Run install script using PowerShell
 		// Replace placeholder in script with actual installer path
 		installScript := strings.ReplaceAll(release.Win32.InstallScript, "{{INSTALLER_PATH}}", installerPath)
 
 		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", installScript)
+		cmd.Dir = executionDir
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
 
 		if err := cmd.Run(); err != nil {
-			os.Remove(installerPath)
 			return fmt.Errorf("install script failed: %v", err)
 		}
-
-		// Cleanup installer
-		os.Remove(installerPath)
 
 		log.Printf("Successfully installed win32 app (version %s)", release.Version)
 		return nil
@@ -593,7 +560,7 @@ func installApp(release AssignedRelease, serverURL string) error {
 			if err == nil && installedVersion != "" {
 				if compareVersions(installedVersion, release.Version) > 0 {
 					log.Printf("Higher version (%s) of %s is already installed (requested version: %s), uninstalling first...", installedVersion, release.Winget.WingetID, release.Version)
-					if err := uninstallApp(release); err != nil {
+					if err := uninstallApp(release, serverURL); err != nil {
 						return fmt.Errorf("failed to uninstall higher version before downgrade: %v", err)
 					}
 				}
@@ -635,6 +602,83 @@ func installApp(release AssignedRelease, serverURL string) error {
 	default:
 		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
 	}
+}
+
+// prepareWin32Binary downloads and prepares a win32 binary for execution (handles ZIPs)
+func prepareWin32Binary(release AssignedRelease, serverURL string, purpose string) (string, string, func(), error) {
+	if release.Win32 == nil {
+		return "", "", nil, fmt.Errorf("win32 release data is missing")
+	}
+
+	tempDir := os.TempDir()
+	installerPath := filepath.Join(tempDir, filepath.Base(release.Win32.InstallBinaryPath))
+
+	// Download the binary
+	downloadURL := fmt.Sprintf("%s/apps/download/%s", serverURL, release.ID)
+	log.Printf("Downloading binary for %s from: %s", purpose, downloadURL)
+
+	resp, err := utils.Get(downloadURL, map[string]string{})
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to download binary: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", "", nil, fmt.Errorf("failed to download binary: HTTP %d", resp.StatusCode)
+	}
+
+	// Create local file
+	f, err := os.Create(installerPath)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to create local file: %v", err)
+	}
+
+	if _, err = utils.Copy(f, resp.Body); err != nil {
+		f.Close()
+		os.Remove(installerPath)
+		return "", "", nil, fmt.Errorf("failed to save binary: %v", err)
+	}
+	f.Close()
+
+	// Verify hash
+	if release.Win32.Hash != "" {
+		fileHash, err := utils.CalculateFileHash(installerPath)
+		if err != nil {
+			os.Remove(installerPath)
+			return "", "", nil, fmt.Errorf("failed to calculate hash: %v", err)
+		}
+		if !strings.EqualFold(fileHash, release.Win32.Hash) {
+			os.Remove(installerPath)
+			return "", "", nil, fmt.Errorf("hash mismatch: expected %s, got %s", release.Win32.Hash, fileHash)
+		}
+		log.Println("Hash verified successfully")
+	}
+
+	executionDir := tempDir
+	var cleanupExtract func()
+
+	// If it's a ZIP, extract it
+	if strings.HasSuffix(strings.ToLower(release.Win32.InstallBinaryPath), ".zip") {
+		extractDir := filepath.Join(tempDir, fmt.Sprintf("extract_%s_%s", purpose, release.ID))
+		os.MkdirAll(extractDir, os.ModePerm)
+		log.Printf("Extracting ZIP for %s to: %s", purpose, extractDir)
+		if err := utils.Unzip(installerPath, extractDir); err != nil {
+			os.Remove(installerPath)
+			os.RemoveAll(extractDir)
+			return "", "", nil, fmt.Errorf("failed to unzip binary: %v", err)
+		}
+		executionDir = extractDir
+		cleanupExtract = func() { os.RemoveAll(extractDir) }
+	}
+
+	cleanupAll := func() {
+		os.Remove(installerPath)
+		if cleanupExtract != nil {
+			cleanupExtract()
+		}
+	}
+
+	return installerPath, executionDir, cleanupAll, nil
 }
 
 // upgradeApp upgrades an application based on its release type
