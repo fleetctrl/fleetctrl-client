@@ -835,6 +835,8 @@ func parseRegistryPath(path string) (registry.Key, string) {
 
 // compareVersions compares two version strings, returns -1, 0, or 1
 func compareVersions(v1, v2 string) int {
+	v1 = strings.ReplaceAll(v1, "-", ".")
+	v2 = strings.ReplaceAll(v2, "-", ".")
 	parts1 := strings.Split(v1, ".")
 	parts2 := strings.Split(v2, ".")
 	maxLen := max(len(parts2), len(parts1))
