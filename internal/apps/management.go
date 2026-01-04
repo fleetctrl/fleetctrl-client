@@ -16,10 +16,10 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 	switch release.InstallerType {
 	case "win32":
 		if release.Win32 == nil {
-			return utils.Errorf("win32 release data is missing")
+			return fmt.Errorf("win32 release data is missing")
 		}
 		if release.Win32.UninstallScript == "" {
-			return utils.Errorf("uninstall script is missing for win32 release")
+			return fmt.Errorf("uninstall script is missing for win32 release")
 		}
 
 		utils.Infof("Uninstalling win32 app (version %s) using script...", release.Version)
