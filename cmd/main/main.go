@@ -351,7 +351,7 @@ func (ms *MainService) startApplicationsManagement() {
 		}
 
 		for _, app := range assignedAppsResponse.Apps {
-			newestRelease := app.Releases[0]
+			newestRelease := app.Releases[len(app.Releases)-1]
 			if newestRelease.AssignType == "exclude" {
 				continue
 			}
