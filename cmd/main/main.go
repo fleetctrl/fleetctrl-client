@@ -123,7 +123,7 @@ func NewMainService(as *auth.AuthService, serverURL string) *MainService {
 }
 
 func (ms *MainService) startRustDeskServerSync() {
-	fmt.Println("Starting RustDesk sync...")
+	log.Println("Starting RustDesk sync...")
 	for {
 		// get rustdesk ID
 		rustdeskID, err := utils.GetRustDeskID()
@@ -256,8 +256,8 @@ func (ms *MainService) startRustDeskServerTasks() {
 
 				// set passwor using powershell
 				cmd := exec.Command("C:\\Program Files\\RustDesk\\RustDesk.exe", "--password", d.Password)
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
+				cmd.Stdout = log.Writer()
+				cmd.Stderr = log.Writer()
 				err := cmd.Run()
 				if err != nil {
 					log.Println(err)
@@ -293,8 +293,8 @@ func (ms *MainService) startRustDeskServerTasks() {
 				cleanString := strings.TrimLeft(d.NetworkString, "=")
 				// set network using powershell
 				cmd := exec.Command("C:\\Program Files\\RustDesk\\RustDesk.exe", "--config", cleanString)
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
+				cmd.Stdout = log.Writer()
+				cmd.Stderr = log.Writer()
 				err := cmd.Run()
 				if err != nil {
 					log.Println(err)
@@ -452,8 +452,8 @@ func uninstallApp(release AssignedRelease) error {
 
 		// Run uninstall script using PowerShell
 		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", release.Win32.UninstallScript)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = log.Writer()
+		cmd.Stderr = log.Writer()
 
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("uninstall script failed: %v", err)
@@ -486,8 +486,8 @@ func uninstallApp(release AssignedRelease) error {
 		`, release.Winget.WingetID)
 
 		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = log.Writer()
+		cmd.Stderr = log.Writer()
 
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("winget uninstall failed: %v", err)
@@ -565,8 +565,8 @@ func installApp(release AssignedRelease, serverURL string) error {
 		installScript := strings.ReplaceAll(release.Win32.InstallScript, "{{INSTALLER_PATH}}", installerPath)
 
 		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", installScript)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = log.Writer()
+		cmd.Stderr = log.Writer()
 
 		if err := cmd.Run(); err != nil {
 			os.Remove(installerPath)
@@ -622,8 +622,8 @@ func installApp(release AssignedRelease, serverURL string) error {
 		`, wingetArgs)
 
 		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = log.Writer()
+		cmd.Stderr = log.Writer()
 
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("winget install failed: %v", err)
@@ -662,8 +662,8 @@ func upgradeApp(release AssignedRelease) error {
 		`, release.Winget.WingetID)
 
 		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = log.Writer()
+		cmd.Stderr = log.Writer()
 
 		if err := cmd.Run(); err != nil {
 			if exitError, ok := err.(*exec.ExitError); ok {
@@ -973,7 +973,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 		log.Fatalln("This computer is not registered on the server.")
 	}
 
-	fmt.Println("Is computer registered: ", registered)
+	log.Println("Is computer registered: ", registered)
 	var tokens auth.Tokens
 
 	// load refresh token and refresh access token
@@ -1038,9 +1038,42 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 				log.Printf("Unknown service command: %d", c.Cmd)
 			}
 		case <-ticker.C:
-			// do nothing
+			log.Println("Service heartbeat...")
 		}
 	}
+}
+
+type logWriter struct {
+	path string
+}
+
+func (w logWriter) Write(p []byte) (n int, err error) {
+	// Check if rotation is needed
+	if info, err := os.Stat(w.path); err == nil {
+		if info.Size() > consts.MaxLogSize {
+			oldPath := w.path + ".old"
+			_ = os.Remove(oldPath)         // Ignore error if not exists
+			_ = os.Rename(w.path, oldPath) // Ignore error if file is open elsewhere, just don't rotate this time
+		}
+	}
+
+	// Try to open the file with a small retry logic for transient locks
+	var f *os.File
+	for range 3 {
+		f, err = os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if err != nil {
+		// If we still can't open it (e.g. hard lock), return len(p) to prevent pipe break
+		// but we can't do much more here.
+		return len(p), nil
+	}
+	defer f.Close()
+	return f.Write(p)
 }
 
 func main() {
@@ -1081,20 +1114,15 @@ func main() {
 		}
 	}
 
-	// 1) open (or create) file for writing
-	f, err := os.OpenFile(consts.TargetDir+`\client.log`,
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, // append to end
-		0o644)                               // perms rw-r-r
-	if err != nil {
-		log.Fatalf("failed to open log: %v", err)
-	}
-	defer f.Close()
+	// redirect logger output to a custom writer that opens/closes the file for each write
+	// this prevents issues when the log file is opened/moved/deleted by other processes
+	logPath := filepath.Join(consts.TargetDir, "client.log")
+	log.SetOutput(logWriter{path: logPath})
 
-	// 2) redirect logger output
-	log.SetOutput(f)
-
-	// 3) set format (date, time, file:line)
+	// set format (date, time, file:line)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	log.Printf("Starting fleetctrl-client version %s...", consts.Version)
 
 	if !consts.Production {
 		// initialize supabase client
