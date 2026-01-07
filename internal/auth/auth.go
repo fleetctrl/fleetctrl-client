@@ -104,14 +104,10 @@ func (as *AuthService) IsEnrolled() (bool, error) {
 		return false, err
 	}
 
-	// wait until server is active
-	for !active {
-		time.Sleep(15 * time.Minute)
-		active, err = utils.Ping(as.serverURL)
-		if err != nil {
-			return false, err
-		}
+	if !active {
+		return false, errors.New("server is not active")
 	}
+
 	res, err := utils.Get(as.serverURL+"/enroll/"+fingerprint+"/is-enrolled", map[string]string{
 		"Content-Type": "application/json",
 	})

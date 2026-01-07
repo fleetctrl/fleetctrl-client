@@ -36,13 +36,35 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 		log.Fatalln("error getting key from registry: ", err)
 	}
 
+	// Initialize services
+	as := auth.NewAuthService(serverURL)
+	ms := service.NewMainService(as, serverURL)
+
+	var registered bool
+	delay := 5 * time.Second
+	const maxDelay = 15 * time.Minute
+
+	// Connection and enrollment check loop with exponential backoff
 	for {
+		// Check connection
 		ok, err := utils.Ping(serverURL)
-		if err == nil && ok {
-			break
+		if err != nil {
+			utils.Errorf("Ping error: %v", err)
+		} else if !ok {
+			utils.Info("Ping failed: server unhealthy")
+		} else {
+			// Connection is good, check enrollment
+			registered, err = as.IsEnrolled()
+			if err == nil {
+				// Success
+				break
+			}
+			utils.Errorf("Error checking enrollment: %v", err)
 		}
 
-		// wait briefly, but allow Stop/Shutdown
+		utils.Infof("Retrying in %v...", delay)
+
+		// wait with backoff, but allow Stop/Shutdown
 		select {
 		case c := <-r:
 			switch c.Cmd {
@@ -52,19 +74,14 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 			case svc.Interrogate:
 				changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 			}
-		case <-time.After(5 * time.Second): // instead of 5 minutes; exponential backoff could be better
+		case <-time.After(delay):
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
 		}
 	}
 
-	// check if computer is enrolled
-	as := auth.NewAuthService(serverURL)
-	ms := service.NewMainService(as, serverURL)
-
-	// check if computer is registered
-	registered, err := as.IsEnrolled()
-	if err != nil {
-		log.Fatalf("error during registration check: %v", err)
-	}
 	if !registered {
 		log.Fatalln("This computer is not registered on the server.")
 	}
