@@ -1,7 +1,7 @@
 package auth
 
 import (
-	consts "KiskaLE/RustDesk-ID/cmd/internal/const"
+	consts "KiskaLE/RustDesk-ID/internal/const"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
