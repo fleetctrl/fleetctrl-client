@@ -40,12 +40,10 @@ type DetectionRule struct {
 }
 
 type ReleaseRequirement struct {
+	ID             string `json:"id"`
 	TimeoutSeconds int64  `json:"timeout_seconds"`
 	RunAsSystem    bool   `json:"run_as_system"`
-	StoragePath    string `json:"storage_path"`
 	Hash           string `json:"hash"`
-	Bucket         string `json:"bucket"`
-	ByteSize       int64  `json:"byte_size"`
 }
 
 type AssignedRelease struct {

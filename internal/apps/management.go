@@ -87,6 +87,17 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 
 // InstallApp installs an application based on its release type
 func InstallApp(release models.AssignedRelease, serverURL string) error {
+	// Check requirements before installation
+	if len(release.Requirements) > 0 {
+		passed, err := CheckRequirements(release, serverURL)
+		if err != nil {
+			return fmt.Errorf("requirement check failed: %v", err)
+		}
+		if !passed {
+			return fmt.Errorf("requirements not met, skipping installation")
+		}
+	}
+
 	switch release.InstallerType {
 	case "win32":
 		if release.Win32 == nil {
