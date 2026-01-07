@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/golang-jwt/jwt"
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	"golang.org/x/sys/windows/registry"
 )
 
 type win32BaseBoard struct {
@@ -82,66 +82,36 @@ func baseboardSerial() string {
 	return normalize(v)
 }
 
-func biosSerial() string {
-	var rows []win32BIOS
-	if err := wmi.Query(
-		"SELECT SerialNumber FROM Win32_BIOS", &rows,
-	); err != nil {
-		return ""
+// Get MachineGuid from registry (64-bit view on 64-bit Windows).
+func machineGUID() (string, error) {
+	const path = `SOFTWARE\Microsoft\Cryptography`
+
+	// Try 64-bit view first (even from 32-bit process).
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, path,
+		registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		// Fallback: default view (works on 32-bit OS / some environments)
+		k, err = registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+		if err != nil {
+			return "", err
+		}
 	}
-	if len(rows) == 0 || rows[0].SerialNumber == nil {
-		return ""
+	defer k.Close()
+
+	v, _, err := k.GetStringValue("MachineGuid")
+	if err != nil {
+		return "", err
 	}
-	v := *rows[0].SerialNumber
-	if isJunk(v) {
-		return ""
-	}
-	return normalize(v)
+	return normalize(v), nil
 }
 
-func physicalMACs() []string {
-	var nics []win32NetworkAdapter
-	if err := wmi.Query(
-		"SELECT MACAddress, PhysicalAdapter, NetEnabled FROM "+
-			"Win32_NetworkAdapter",
-		&nics,
-	); err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(nics))
-	for _, n := range nics {
-		if !n.PhysicalAdapter {
-			continue
-		}
-		if n.NetEnabled == nil || !*n.NetEnabled {
-			continue
-		}
-		if n.MACAddress == nil {
-			continue
-		}
-		v := *n.MACAddress
-		if isJunk(v) {
-			continue
-		}
-		out = append(out, normalize(v))
-	}
-	// dedup + sort
-	m := map[string]struct{}{}
-	for _, v := range out {
-		m[v] = struct{}{}
-	}
-	out = out[:0]
-	for v := range m {
-		out = append(out, v)
-	}
-	sort.Strings(out)
-	return out
+// Public: vrátí jen MachineGuid (normalizovaný).
+func GetMachineGUID() (string, error) {
+	return machineGUID()
 }
 
 func fingerprintBoardAndMAC(
 	salt string,
-	includeMAC bool,
-	includeBIOS bool,
 ) (string, map[string]string) {
 	parts := []string{}
 	details := map[string]string{}
@@ -150,19 +120,10 @@ func fingerprintBoardAndMAC(
 		details["baseboard_serial"] = bb
 		parts = append(parts, "baseboard="+bb)
 	}
-	if includeBIOS {
-		if bs := biosSerial(); bs != "" {
-			details["bios_serial"] = bs
-			parts = append(parts, "bios="+bs)
-		}
-	}
-	if includeMAC {
-		macs := physicalMACs()
-		if len(macs) > 0 {
-			joined := strings.Join(macs, ",")
-			details["macs"] = joined
-			parts = append(parts, "macs="+joined)
-		}
+
+	if mg, err := machineGUID(); err == nil {
+		details["machine_guid"] = mg
+		parts = append(parts, "guid="+mg)
 	}
 
 	parts = append(parts, "salt="+normalize(salt))
@@ -172,7 +133,7 @@ func fingerprintBoardAndMAC(
 }
 
 func GetComputerFingerprint() string {
-	hash, _ := fingerprintBoardAndMAC("my-app-v1", true, false)
+	hash, _ := fingerprintBoardAndMAC("fleetctrl-client")
 
 	return hash
 }

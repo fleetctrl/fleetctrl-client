@@ -149,6 +149,13 @@ func InstallService(enrollToken string, serverURL string) error {
 	}
 	key.Close()
 
+	var serverURLKey = RegistryValue{Type: RegistryString, Value: serverURL}
+	key, err = SetRegisteryValue(registry.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url", serverURLKey)
+	if err != nil {
+		return errors.New("chyba při nastavování hodnoty server_url v registru: " + err.Error())
+	}
+	key.Close()
+
 	as := auth.NewAuthService(serverURL)
 	tokens, err := as.Enroll(enrollToken)
 	if err != nil {
