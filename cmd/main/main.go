@@ -8,6 +8,7 @@ import (
 	"KiskaLE/RustDesk-ID/internal/service"
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -151,7 +152,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 				utils.Errorf("Unknown service command: %d", c.Cmd)
 			}
 		case <-ticker.C:
-			utils.Info("Service heartbeat...")
+			fmt.Println("Service heartbeat...")
 		}
 	}
 }
