@@ -1,8 +1,10 @@
 package apps
 
 import (
+	"KiskaLE/RustDesk-ID/internal/const"
 	"KiskaLE/RustDesk-ID/internal/models"
 	"KiskaLE/RustDesk-ID/internal/utils"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +15,9 @@ import (
 
 // UninstallApp uninstalls an application based on its release type
 func UninstallApp(release models.AssignedRelease, serverURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), consts.AppInstallTimeout)
+	defer cancel()
+
 	switch release.InstallerType {
 	case "win32":
 		if release.Win32 == nil {
@@ -34,7 +39,7 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 		// Replace placeholder in script with actual binary path
 		uninstallScript := strings.ReplaceAll(release.Win32.UninstallScript, "{{INSTALLER_PATH}}", installerPath)
 
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallScript)
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallScript)
 		cmd.Dir = executionDir
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
@@ -69,7 +74,7 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 		exit $exitCode
 		`, release.Winget.WingetID)
 
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
 
@@ -87,6 +92,9 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 
 // InstallApp installs an application based on its release type
 func InstallApp(release models.AssignedRelease, serverURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), consts.AppInstallTimeout)
+	defer cancel()
+
 	// Check requirements before installation
 	if len(release.Requirements) > 0 {
 		passed, err := CheckRequirements(release, serverURL)
@@ -119,7 +127,7 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		// Replace placeholder in script with actual installer path
 		installScript := strings.ReplaceAll(release.Win32.InstallScript, "{{INSTALLER_PATH}}", installerPath)
 
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", installScript)
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", installScript)
 		cmd.Dir = executionDir
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
@@ -175,7 +183,7 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		exit $exitCode
 		`, wingetArgs)
 
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
 
@@ -193,6 +201,9 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 
 // UpgradeApp upgrades an application based on its release type
 func UpgradeApp(release models.AssignedRelease) error {
+	ctx, cancel := context.WithTimeout(context.Background(), consts.AppInstallTimeout)
+	defer cancel()
+
 	switch release.InstallerType {
 	case "winget":
 		if release.Winget == nil {
@@ -215,7 +226,7 @@ func UpgradeApp(release models.AssignedRelease) error {
 		exit $exitCode
 		`, release.Winget.WingetID)
 
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
 
