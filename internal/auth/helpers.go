@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,16 +24,8 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-type win32BaseBoard struct {
-	SerialNumber *string
-}
-type win32BIOS struct {
-	SerialNumber *string
-}
-type win32NetworkAdapter struct {
-	MACAddress      *string
-	PhysicalAdapter bool
-	NetEnabled      *bool
+type win32ComputerSystemProduct struct {
+	UUID *string
 }
 
 type Keys struct {
@@ -65,21 +56,19 @@ func isJunk(s string) bool {
 	return false
 }
 
-func baseboardSerial() string {
-	var rows []win32BaseBoard
-	if err := wmi.Query(
-		"SELECT SerialNumber FROM Win32_BaseBoard", &rows,
-	); err != nil {
+func getComputerUUID() string {
+	var rows []win32ComputerSystemProduct
+	if err := wmi.Query("SELECT UUID FROM Win32_ComputerSystemProduct", &rows); err != nil {
 		return ""
 	}
-	if len(rows) == 0 || rows[0].SerialNumber == nil {
+	if len(rows) == 0 || rows[0].UUID == nil {
 		return ""
 	}
-	v := *rows[0].SerialNumber
+	v := *rows[0].UUID
 	if isJunk(v) {
 		return ""
 	}
-	return normalize(v)
+	return strings.TrimSpace(v)
 }
 
 // Get MachineGuid from registry (64-bit view on 64-bit Windows).
@@ -110,32 +99,8 @@ func GetMachineGUID() (string, error) {
 	return machineGUID()
 }
 
-func fingerprintBoardAndMAC(
-	salt string,
-) (string, map[string]string) {
-	parts := []string{}
-	details := map[string]string{}
-
-	if bb := baseboardSerial(); bb != "" {
-		details["baseboard_serial"] = bb
-		parts = append(parts, "baseboard="+bb)
-	}
-
-	if mg, err := machineGUID(); err == nil {
-		details["machine_guid"] = mg
-		parts = append(parts, "guid="+mg)
-	}
-
-	parts = append(parts, "salt="+normalize(salt))
-	data := strings.Join(parts, "\n")
-	sum := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(sum[:]), details
-}
-
 func GetComputerFingerprint() string {
-	hash, _ := fingerprintBoardAndMAC("fleetctrl-client")
-
-	return hash
+	return getComputerUUID()
 }
 
 // Auth
