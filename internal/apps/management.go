@@ -11,7 +11,39 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// waitForWingetLock waits for any existing winget process to complete.
+// If the process doesn't complete within the timeout, it will be killed.
+func waitForWingetLock(timeout time.Duration) {
+	checkScript := `Get-Process -Name winget -ErrorAction SilentlyContinue | Select-Object -First 1`
+	killScript := `Get-Process -Name winget -ErrorAction SilentlyContinue | Stop-Process -Force`
+
+	startTime := time.Now()
+	for {
+		// Check if winget is running
+		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", checkScript)
+		output, _ := cmd.Output()
+
+		if len(strings.TrimSpace(string(output))) == 0 {
+			// No winget process running
+			return
+		}
+
+		// Check timeout
+		if time.Since(startTime) >= timeout {
+			utils.Info("Winget process didn't complete in time, killing it...")
+			killCmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", killScript)
+			killCmd.Run()
+			time.Sleep(1 * time.Second) // Wait a bit for the process to be killed
+			return
+		}
+
+		utils.Info("Waiting for another winget process to complete...")
+		time.Sleep(2 * time.Second)
+	}
+}
 
 // UninstallApp uninstalls an application based on its release type
 func UninstallApp(release models.AssignedRelease, serverURL string) error {
@@ -61,14 +93,17 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 
 		utils.Infof("Uninstalling winget app %s (version %s)...", release.Winget.WingetID, release.Version)
 
+		// Wait for any existing winget process to complete
+		waitForWingetLock(30 * time.Minute)
+
 		// Run winget uninstall via PowerShell (winget needs to run from its folder when running as SYSTEM)
 		psScript := fmt.Sprintf(`
+		$ProgressPreference = 'SilentlyContinue'
 		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
 		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
 		Push-Location $wingetDir
-		$result = .\winget.exe uninstall --id "%s" --silent --accept-source-agreements | Out-String
-		Write-Host $result
+		.\winget.exe uninstall --id "%s" --silent --force --accept-source-agreements --disable-interactivity
 		$exitCode = $LASTEXITCODE
 		Pop-Location
 		exit $exitCode
@@ -164,20 +199,23 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 
 		utils.Infof("Installing winget app %s (version %s)...", release.Winget.WingetID, release.Version)
 
+		// Wait for any existing winget process to complete
+		waitForWingetLock(30 * time.Minute)
+
 		// Build winget arguments
-		wingetArgs := fmt.Sprintf(`--id "%s" --silent --accept-package-agreements --accept-source-agreements`, release.Winget.WingetID)
+		wingetArgs := fmt.Sprintf(`--id "%s" --silent --force --accept-package-agreements --accept-source-agreements --disable-interactivity`, release.Winget.WingetID)
 		if release.Version != "" && release.Version != "latest" {
 			wingetArgs += fmt.Sprintf(` -v %s`, release.Version)
 		}
 
 		// Run winget install via PowerShell (winget needs to run from its folder when running as SYSTEM)
 		psScript := fmt.Sprintf(`
+		$ProgressPreference = 'SilentlyContinue'
 		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
 		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
 		Push-Location $wingetDir
-		$result = .\winget.exe install %s | Out-String
-		Write-Host $result
+		.\winget.exe install %s
 		$exitCode = $LASTEXITCODE
 		Pop-Location
 		exit $exitCode
@@ -213,14 +251,17 @@ func UpgradeApp(release models.AssignedRelease) error {
 			return fmt.Errorf("winget ID is missing")
 		}
 
+		// Wait for any existing winget process to complete
+		waitForWingetLock(30 * time.Minute)
+
 		// Run winget upgrade via PowerShell
 		psScript := fmt.Sprintf(`
+		$ProgressPreference = 'SilentlyContinue'
 		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
 		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
 		Push-Location $wingetDir
-		$result = .\winget.exe upgrade --id "%s" --silent --accept-package-agreements --accept-source-agreements | Out-String
-		Write-Host $result
+		.\winget.exe upgrade --id "%s" --silent --force --accept-package-agreements --accept-source-agreements --disable-interactivity
 		$exitCode = $LASTEXITCODE
 		Pop-Location
 		exit $exitCode
