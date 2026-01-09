@@ -1,7 +1,9 @@
 package consts
 
+import "time"
+
 const (
-	Version            = "0.4.1"
+	Version            = "v0.5.0"
 	Production         = true
 	ServiceName        = "fleetctrl-client"
 	ServiceDisplayName = "fleetctrl client"
@@ -11,4 +13,5 @@ const (
 	CompanyRegitryKey  = `SOFTWARE\WOW6432Node\fleetctrl`
 	RegisteryRootKey   = `SOFTWARE\WOW6432Node\fleetctrl\client`
 	MaxLogSize         = 20 * 1024 * 1024 // 20 MB
+	AppInstallTimeout  = 30 * time.Minute
 )
