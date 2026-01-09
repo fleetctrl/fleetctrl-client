@@ -6,6 +6,7 @@ import (
 	"KiskaLE/RustDesk-ID/internal/manager"
 	"KiskaLE/RustDesk-ID/internal/registry"
 	"KiskaLE/RustDesk-ID/internal/service"
+	"KiskaLE/RustDesk-ID/internal/updater"
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"flag"
 	"fmt"
@@ -129,6 +130,9 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 			utils.Error("error saving refresh token after refresh:", err)
 		}
 	})
+
+	// Initialize auto-updater
+	updater.InitUpdater(serverURL)
 
 	go ms.StartRustDeskServerSync()
 	go ms.StartRustDeskServerTasks()
@@ -292,6 +296,9 @@ func main() {
 				utils.Error("error saving refresh token after refresh:", err)
 			}
 		})
+
+		// Initialize auto-updater
+		updater.InitUpdater(serverURL)
 
 		go ms.StartRustDeskServerSync()
 		go ms.StartRustDeskServerTasks()

@@ -2,12 +2,14 @@ package auth
 
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
+	"KiskaLE/RustDesk-ID/internal/updater"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -82,6 +84,11 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return base.RoundTrip(reqRetry)
 		}
 		return res, err
+	}
+
+	// Check for update header on successful responses
+	if res.StatusCode >= 200 && res.StatusCode < 400 {
+		t.checkForUpdate(res)
 	}
 
 	if res.StatusCode != http.StatusUnauthorized {
@@ -291,6 +298,19 @@ func isBypassedPath(path string) bool {
 	case "/health", "/enroll", "/token/refresh", "/token/recover":
 		return true
 	default:
+		// Also bypass client download paths to avoid recursion during updates
+		if strings.HasPrefix(path, "/client/download/") {
+			return true
+		}
 		return false
 	}
+}
+
+// checkForUpdate checks the response for update headers and triggers update if available
+func (t *AuthTransport) checkForUpdate(resp *http.Response) {
+	u := updater.GetUpdater()
+	if u == nil {
+		return
+	}
+	u.ProcessUpdate(resp)
 }
