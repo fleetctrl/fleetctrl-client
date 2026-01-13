@@ -82,5 +82,6 @@ type Computer struct {
 	OS             string `json:"os"`
 	OSVersion      string `json:"os_version"`
 	LoginUser      string `json:"login_user"`
+	IntuneID       string `json:"intune_id"`
 	LastConnection string `json:"last_connection"`
 }

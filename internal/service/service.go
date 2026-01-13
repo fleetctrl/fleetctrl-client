@@ -60,6 +60,11 @@ func (ms *MainService) StartRustDeskServerSync() {
 			utils.Error(err)
 		}
 
+		intuneID, err := utils.GetIntuneID()
+		if err != nil {
+			utils.Error(err)
+		}
+
 		computer := models.Computer{
 			Name:           computerName,
 			RustdeskID:     rustdeskID,
@@ -67,6 +72,7 @@ func (ms *MainService) StartRustDeskServerSync() {
 			OS:             osName,
 			OSVersion:      osVersion,
 			LoginUser:      loginUser,
+			IntuneID:       intuneID,
 			LastConnection: time.Now().Format(time.RFC3339),
 		}
 
@@ -77,6 +83,7 @@ func (ms *MainService) StartRustDeskServerSync() {
 			"os":              computer.OS,
 			"os_version":      computer.OSVersion,
 			"login_user":      computer.LoginUser,
+			"intune_id":       computer.IntuneID,
 			"last_connection": computer.LastConnection,
 		}, map[string]string{
 			"Content-Type": "application/json",
