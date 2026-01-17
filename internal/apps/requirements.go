@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // RequirementResult represents the result of a requirement check
@@ -64,7 +66,7 @@ func checkSingleRequirement(req models.ReleaseRequirement, serverURL string) (bo
 
 	// Create temp file for script
 	tempDir := os.TempDir()
-	scriptPath := filepath.Join(tempDir, fmt.Sprintf("requirement_%s.ps1", req.ID))
+	scriptPath := filepath.Join(tempDir, fmt.Sprintf("%s.ps1", uuid.New().String()))
 
 	f, err := os.Create(scriptPath)
 	if err != nil {
