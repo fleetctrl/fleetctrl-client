@@ -1,7 +1,7 @@
 package apps
 
 import (
-	"KiskaLE/RustDesk-ID/internal/const"
+	consts "KiskaLE/RustDesk-ID/internal/const"
 	"KiskaLE/RustDesk-ID/internal/models"
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"context"
@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // waitForWingetLock waits for any existing winget process to complete.
@@ -296,7 +298,7 @@ func PrepareWin32Binary(release models.AssignedRelease, serverURL string, purpos
 	}
 
 	tempDir := os.TempDir()
-	installerPath := filepath.Join(tempDir, filepath.Base(release.Win32.InstallBinaryPath))
+	installerPath := filepath.Join(tempDir, fmt.Sprintf("%s%s", uuid.New().String(), filepath.Ext(release.Win32.InstallerName)))
 
 	// Download the binary
 	downloadURL := fmt.Sprintf("%s/apps/download/%s", serverURL, release.ID)
@@ -343,7 +345,7 @@ func PrepareWin32Binary(release models.AssignedRelease, serverURL string, purpos
 	var cleanupExtract func()
 
 	// If it's a ZIP, extract it
-	if strings.HasSuffix(strings.ToLower(release.Win32.InstallBinaryPath), ".zip") {
+	if strings.HasSuffix(strings.ToLower(release.Win32.InstallerName), ".zip") {
 		extractDir := filepath.Join(tempDir, fmt.Sprintf("extract_%s_%s", purpose, release.ID))
 		os.MkdirAll(extractDir, os.ModePerm)
 		utils.Infof("Extracting ZIP for %s to: %s", purpose, extractDir)

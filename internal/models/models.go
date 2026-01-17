@@ -22,7 +22,7 @@ type SetNetworkStringTask struct {
 }
 
 type Win32Release struct {
-	InstallBinaryPath   string `json:"install_binary_path"`
+	InstallerName       string `json:"installer_name"`
 	Hash                string `json:"hash"`
 	InstallScript       string `json:"install_script"`
 	UninstallScript     string `json:"uninstall_script"`
@@ -41,6 +41,7 @@ type DetectionRule struct {
 
 type ReleaseRequirement struct {
 	ID             string `json:"id"`
+	ScriptName     string `json:"script_name"`
 	TimeoutSeconds int64  `json:"timeout_seconds"`
 	RunAsSystem    bool   `json:"run_as_system"`
 	Hash           string `json:"hash"`
