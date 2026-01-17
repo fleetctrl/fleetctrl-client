@@ -3,6 +3,7 @@ package service
 import (
 	"KiskaLE/RustDesk-ID/internal/apps"
 	"KiskaLE/RustDesk-ID/internal/auth"
+	"KiskaLE/RustDesk-ID/internal/database"
 	"KiskaLE/RustDesk-ID/internal/models"
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"encoding/json"
@@ -217,6 +218,7 @@ func (ms *MainService) StartRustDeskServerTasks() {
 
 func (ms *MainService) StartApplicationsManagement() {
 	utils.Info("Starting applications management...")
+
 	for {
 		// get asigned applications
 		appsResponse, err := utils.Get(ms.serverURL+"/apps/assigned", map[string]string{
@@ -258,9 +260,24 @@ func (ms *MainService) StartApplicationsManagement() {
 				}
 				if installed {
 					if newestRelease.InstallerType == "winget" && newestRelease.Winget != nil && app.AutoUpdate {
-						utils.Infof("Checking for updates for winget app %s...", newestRelease.Winget.WingetID)
-						if err := apps.UpgradeApp(newestRelease); err != nil {
-							utils.Errorf("Failed to upgrade winget app %s: %v", newestRelease.Winget.WingetID, err)
+						// Check if we should check for updates (once per 24h)
+						shouldCheck, err := database.ShouldCheckWinget(newestRelease.Winget.WingetID)
+						if err != nil {
+							utils.Errorf("Failed to check database for winget check time: %v", err)
+							shouldCheck = true // Check anyway on error
+						}
+
+						if shouldCheck {
+							utils.Infof("Checking for updates for winget app %s...", newestRelease.Winget.WingetID)
+							if err := apps.UpgradeApp(newestRelease); err != nil {
+								utils.Errorf("Failed to upgrade winget app %s: %v", newestRelease.Winget.WingetID, err)
+							}
+							// Mark as checked
+							if err := database.UpdateWingetCheck(newestRelease.Winget.WingetID); err != nil {
+								utils.Errorf("Failed to update winget check time in database: %v", err)
+							}
+						} else {
+							utils.Infof("Skipping winget update check for %s (already checked in last 24h)", app.DisplayName)
 						}
 					}
 					continue
@@ -274,23 +291,49 @@ func (ms *MainService) StartApplicationsManagement() {
 						if release.Version == newestRelease.Version {
 							continue
 						}
-						if err != nil {
-							utils.Error(err)
-							continue
-						}
+
 						if installed {
 							utils.Info("Previous version is installed, uninstalling...")
+
+							// Check backoff for uninstall
+							shouldAttempt, err := database.ShouldAttemptApp(release.ID)
+							if err != nil {
+								utils.Errorf("Failed to check backoff: %v", err)
+								shouldAttempt = true
+							}
+							if !shouldAttempt {
+								utils.Infof("Skipping uninstallation of previous version %s due to backoff after multiple failures", release.Version)
+								continue
+							}
+
 							if err := apps.UninstallApp(release, ms.serverURL); err != nil {
 								utils.Errorf("Failed to uninstall previous version: %v", err)
+								database.RecordAppFailure(release.ID)
+							} else {
+								database.ResetAppFailures(release.ID)
 							}
 							break
 						}
 					}
 				}
 
+				// Check backoff for install
+				shouldAttempt, err := database.ShouldAttemptApp(newestRelease.ID)
+				if err != nil {
+					utils.Errorf("Failed to check backoff: %v", err)
+					shouldAttempt = true
+				}
+				if !shouldAttempt {
+					utils.Infof("Skipping installation of %s due to backoff after multiple failures", app.DisplayName)
+					continue
+				}
+
 				err = apps.InstallApp(newestRelease, ms.serverURL)
 				if err != nil {
 					utils.Errorf("Failed to install app: %v", err)
+					database.RecordAppFailure(newestRelease.ID)
+				} else {
+					database.ResetAppFailures(newestRelease.ID)
 				}
 
 			case "uninstall":
@@ -307,14 +350,25 @@ func (ms *MainService) StartApplicationsManagement() {
 				// application is installed
 				// uninstall application
 				for _, release := range app.Releases {
-					if err != nil {
-						utils.Error(err)
-						continue
-					}
 					if installed {
 						log.Println("Previous version is installed, uninstalling...")
+
+						// Check backoff
+						shouldAttempt, err := database.ShouldAttemptApp(release.ID)
+						if err != nil {
+							utils.Errorf("Failed to check backoff: %v", err)
+							shouldAttempt = true
+						}
+						if !shouldAttempt {
+							utils.Infof("Skipping uninstallation of %s due to backoff after multiple failures", app.DisplayName)
+							continue
+						}
+
 						if err := apps.UninstallApp(release, ms.serverURL); err != nil {
 							log.Printf("Failed to uninstall previous version: %v", err)
+							database.RecordAppFailure(release.ID)
+						} else {
+							database.ResetAppFailures(release.ID)
 						}
 						break
 					}

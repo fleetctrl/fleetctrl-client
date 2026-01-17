@@ -3,6 +3,7 @@ package main
 import (
 	"KiskaLE/RustDesk-ID/internal/auth"
 	consts "KiskaLE/RustDesk-ID/internal/const"
+	"KiskaLE/RustDesk-ID/internal/database"
 	"KiskaLE/RustDesk-ID/internal/manager"
 	"KiskaLE/RustDesk-ID/internal/registry"
 	"KiskaLE/RustDesk-ID/internal/service"
@@ -39,6 +40,11 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 	}
 
 	// Initialize services
+	if err := database.Init(); err != nil {
+		utils.Errorf("Failed to initialize database: %v", err)
+	}
+	defer database.Close()
+
 	as := auth.NewAuthService(serverURL)
 	ms := service.NewMainService(as, serverURL)
 
@@ -291,6 +297,11 @@ func main() {
 		ms.Tokens = &tokens
 
 		// Initialize HTTP client with auth middleware (Bearer + DPoP with auto-refresh)
+		if err := database.Init(); err != nil {
+			utils.Errorf("Failed to initialize database: %v", err)
+		}
+		defer database.Close()
+
 		auth.InitHTTPClient(as, ms.Tokens, func(nt auth.Tokens) {
 			if err := auth.SaveRefershToken(nt.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
 				utils.Error("error saving refresh token after refresh:", err)
