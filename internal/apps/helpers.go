@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	wingetIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	wingetVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]*$`)
+	wingetIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._\-+]*$`)
+	wingetVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._\-+]*$`)
 )
 
 // GetWingetPath finds the full path to winget.exe
@@ -64,7 +64,9 @@ func GetInstalledWingetVersion(wingetID string) (string, error) {
 		return "", fmt.Errorf("failed to query winget package %s: %v (output: %s)", wingetID, err, strings.TrimSpace(string(output)))
 	}
 
-	pattern := regexp.MustCompile(`(?mi)^` + regexp.QuoteMeta(wingetID) + `\s+([^\s]+)`)
+	// Match the line starting with the Winget ID, followed by whitespace and the version.
+	// Use QuoteMeta to escape special characters in wingetID (like ++).
+	pattern := regexp.MustCompile(`(?mi)^.*` + regexp.QuoteMeta(wingetID) + `\s+([^\s]+)`)
 	match := pattern.FindStringSubmatch(string(output))
 	if len(match) < 2 {
 		return "", nil

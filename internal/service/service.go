@@ -279,18 +279,6 @@ func (ms *MainService) StartApplicationsManagement() {
 					continue
 				}
 
-				// Check backoff for install
-				shouldAttempt, err := database.ShouldAttemptApp(newestRelease.ID)
-				if err != nil {
-					utils.Errorf("Failed to check backoff: %v", err)
-					shouldAttempt = true
-				}
-				if !shouldAttempt {
-					utils.Infof("Skipping installation of %s due to backoff after multiple failures", app.DisplayName)
-					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStatePending, nil)
-					continue
-				}
-
 				if installed {
 					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateInstalled, nil)
 					if newestRelease.InstallerType == "winget" && newestRelease.Winget != nil && app.AutoUpdate {
@@ -314,6 +302,18 @@ func (ms *MainService) StartApplicationsManagement() {
 							utils.Infof("Skipping winget update check for %s (already checked in last 24h)", app.DisplayName)
 						}
 					}
+					continue
+				}
+
+				// Check backoff for install
+				shouldAttempt, err := database.ShouldAttemptApp(newestRelease.ID)
+				if err != nil {
+					utils.Errorf("Failed to check backoff: %v", err)
+					shouldAttempt = true
+				}
+				if !shouldAttempt {
+					utils.Infof("Skipping installation of %s due to backoff after multiple failures", app.DisplayName)
+					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateError, nil)
 					continue
 				}
 
