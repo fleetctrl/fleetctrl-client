@@ -54,7 +54,7 @@ func Get(url string, headers map[string]string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
-func Patch(url string, values map[string]string, headers map[string]string) (*http.Response, error) {
+func Patch(url string, values any, headers map[string]string) (*http.Response, error) {
 	jsonValue, err := json.Marshal(values)
 	if err != nil {
 		return nil, err
