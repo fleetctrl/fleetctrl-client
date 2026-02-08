@@ -165,8 +165,6 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 			return fmt.Errorf("install script failed: %v", err)
 		}
 
-		// check if app is installed
-
 		utils.Infof("Successfully installed win32 app (version %s)", release.Version)
 		return nil
 

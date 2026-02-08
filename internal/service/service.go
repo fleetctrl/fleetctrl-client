@@ -278,6 +278,19 @@ func (ms *MainService) StartApplicationsManagement() {
 					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateError, nil)
 					continue
 				}
+
+				// Check backoff for install
+				shouldAttempt, err := database.ShouldAttemptApp(newestRelease.ID)
+				if err != nil {
+					utils.Errorf("Failed to check backoff: %v", err)
+					shouldAttempt = true
+				}
+				if !shouldAttempt {
+					utils.Infof("Skipping installation of %s due to backoff after multiple failures", app.DisplayName)
+					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStatePending, nil)
+					continue
+				}
+
 				if installed {
 					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateInstalled, nil)
 					if newestRelease.InstallerType == "winget" && newestRelease.Winget != nil && app.AutoUpdate {
@@ -303,6 +316,8 @@ func (ms *MainService) StartApplicationsManagement() {
 					}
 					continue
 				}
+
+				ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateInstalling, nil)
 
 				// application is not installed
 				// install application
@@ -338,20 +353,6 @@ func (ms *MainService) StartApplicationsManagement() {
 					}
 				}
 
-				// Check backoff for install
-				shouldAttempt, err := database.ShouldAttemptApp(newestRelease.ID)
-				if err != nil {
-					utils.Errorf("Failed to check backoff: %v", err)
-					shouldAttempt = true
-				}
-				if !shouldAttempt {
-					utils.Infof("Skipping installation of %s due to backoff after multiple failures", app.DisplayName)
-					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStatePending, nil)
-					continue
-				}
-
-				ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStatePending, nil)
-				ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateInstalling, nil)
 				err = apps.InstallApp(newestRelease, ms.serverURL)
 				if err != nil {
 					utils.Errorf("Failed to install app: %v", err)
@@ -360,6 +361,19 @@ func (ms *MainService) StartApplicationsManagement() {
 				} else {
 					database.ResetAppFailures(newestRelease.ID)
 					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateInstalled, nowUnixMilliPtr())
+				}
+
+				// check if app is installed
+				installed, err = apps.IsAppInstalled(newestRelease)
+				if err != nil {
+					utils.Errorf("Failed to check if app is installed: %v", err)
+					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateError, nil)
+					continue
+				}
+				if !installed {
+					utils.Errorf("Unable to install application")
+					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateError, nil)
+					continue
 				}
 
 			case "uninstall":
@@ -402,6 +416,19 @@ func (ms *MainService) StartApplicationsManagement() {
 						}
 						break
 					}
+				}
+
+				// check if application is unisntalled
+				installed, err = apps.IsAppInstalled(newestRelease)
+				if err != nil {
+					utils.Errorf("Failed to check if app is installed: %v", err)
+					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateError, nil)
+					continue
+				}
+				if installed {
+					utils.Errorf("Unable to uninstall application")
+					ms.reportReleaseInstallState(newestRelease.ID, apps.ReleaseInstallStateError, nil)
+					continue
 				}
 			}
 		}
