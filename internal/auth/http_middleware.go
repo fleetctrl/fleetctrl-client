@@ -3,6 +3,7 @@ package auth
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
 	"KiskaLE/RustDesk-ID/internal/updater"
+	"KiskaLE/RustDesk-ID/internal/utils"
 	"context"
 	"encoding/json"
 	"errors"
@@ -106,7 +107,8 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	if req.Header.Get("Second-Try") == "true" {
 		// If already retried, give up
-		log.Panic("cound not refresh tokens")
+		utils.Errorf("Unable to refresh tokens")
+		return nil, errors.New("Unable to refresh tokens")
 	}
 
 	if err := t.refreshLocked(rt); err != nil {
