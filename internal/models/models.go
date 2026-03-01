@@ -47,6 +47,18 @@ type ReleaseRequirement struct {
 	Hash           string `json:"hash"`
 }
 
+type ReleaseScript struct {
+	ID             string `json:"_id"`
+	Phase          string `json:"phase"`
+	Engine         string `json:"engine"`
+	TimeoutSeconds int64  `json:"timeout_seconds"`
+	RunAsSystem    bool   `json:"run_as_system"`
+	ScriptName     string `json:"script_name"`
+	StorageID      string `json:"storage_id"`
+	Hash           string `json:"hash"`
+	ByteSize       int64  `json:"byte_size"`
+}
+
 type AssignedRelease struct {
 	ID                string               `json:"id"`
 	Version           string               `json:"version"`
@@ -58,6 +70,7 @@ type AssignedRelease struct {
 	Winget            *WingetRelease       `json:"winget,omitempty"`
 	DetectionRules    []DetectionRule      `json:"detection_rules,omitempty"`
 	Requirements      []ReleaseRequirement `json:"requirements,omitempty"`
+	Scripts           []ReleaseScript      `json:"scripts,omitempty"`
 }
 
 type AssignedApp struct {

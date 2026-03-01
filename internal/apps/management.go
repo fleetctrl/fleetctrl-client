@@ -135,6 +135,11 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		}
 	}
 
+	// Run pre-install script if configured.
+	if err := runInstallScriptForPhase(release, serverURL, "pre"); err != nil {
+		return err
+	}
+
 	switch release.InstallerType {
 	case "win32":
 		if release.Win32 == nil {
@@ -166,7 +171,6 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		}
 
 		utils.Infof("Successfully installed win32 app (version %s)", release.Version)
-		return nil
 
 	case "winget":
 		if release.Winget == nil {
@@ -217,11 +221,21 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		}
 
 		utils.Infof("Successfully installed winget app %s", release.Winget.WingetID)
-		return nil
 
 	default:
 		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
 	}
+
+	// Run post-install script if configured.
+	if err := runInstallScriptForPhase(release, serverURL, "post"); err != nil {
+		utils.Errorf("Post-install script failed for release %s: %v. Attempting rollback uninstall...", release.ID, err)
+		if uninstallErr := UninstallApp(release, serverURL); uninstallErr != nil {
+			return fmt.Errorf("post-install script failed: %v; rollback uninstall failed: %v", err, uninstallErr)
+		}
+		return fmt.Errorf("post-install script failed: %v; rollback uninstall succeeded", err)
+	}
+
+	return nil
 }
 
 // UpgradeApp upgrades an application based on its release type
