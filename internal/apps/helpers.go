@@ -1,19 +1,30 @@
 package apps
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
+)
+
+var (
+	wingetIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._\-+]*$`)
+	wingetVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._\-+]*$`)
 )
 
 // GetWingetPath finds the full path to winget.exe
 func GetWingetPath() (string, error) {
 	programFilesPath := os.Getenv("ProgramW6432")
+	if programFilesPath == "" {
+		programFilesPath = os.Getenv("ProgramFiles")
+	}
 	if programFilesPath == "" {
 		programFilesPath = "C:\\Program Files"
 	}
@@ -36,26 +47,123 @@ func GetWingetPath() (string, error) {
 
 // GetInstalledWingetVersion returns the version of the winget app if installed, otherwise an empty string
 func GetInstalledWingetVersion(wingetID string) (string, error) {
-	// PowerShell script to get the version of the installed winget app
-	psScript := fmt.Sprintf(`
-	$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-	if (-not $wingetDir) { exit 1 }
-	$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
-	foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
-	Push-Location $wingetDir
-	$output = .\winget.exe list --id "%s" --exact --accept-source-agreements --source winget 2>$null | Out-String
-	Pop-Location
-	if ($output -match '%s\s+([^\s]+)') {
-		Write-Host $matches[1]
-	}
-	`, wingetID, regexp.QuoteMeta(wingetID))
-
-	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-	output, err := cmd.Output()
-	if err != nil {
+	if err := validateWingetID(wingetID); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	output, err := runWingetCommand(ctx, "list", "--id", wingetID, "--exact", "--accept-source-agreements", "--source", "winget")
+	if err != nil {
+		out := strings.ToLower(string(output))
+		// "not installed" is not an error for this lookup.
+		if strings.Contains(out, "no installed package found") || strings.Contains(out, "no package found") {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to query winget package %s: %v (output: %s)", wingetID, err, strings.TrimSpace(string(output)))
+	}
+
+	// Match the line starting with the Winget ID, followed by whitespace and the version.
+	// Use QuoteMeta to escape special characters in wingetID (like ++).
+	pattern := regexp.MustCompile(`(?mi)^.*` + regexp.QuoteMeta(wingetID) + `\s+([^\s]+)`)
+	match := pattern.FindStringSubmatch(string(output))
+	if len(match) < 2 {
+		return "", nil
+	}
+	return strings.TrimSpace(match[1]), nil
+}
+
+func validateWingetID(wingetID string) error {
+	if wingetID == "" {
+		return fmt.Errorf("winget ID is missing")
+	}
+	if !wingetIDPattern.MatchString(wingetID) {
+		return fmt.Errorf("invalid winget ID format: %q", wingetID)
+	}
+	return nil
+}
+
+func validateWingetVersion(version string) error {
+	if version == "" || version == "latest" {
+		return nil
+	}
+	if !wingetVersionPattern.MatchString(version) {
+		return fmt.Errorf("invalid winget version format: %q", version)
+	}
+	return nil
+}
+
+func runWingetCommand(ctx context.Context, args ...string) ([]byte, error) {
+	wingetPath, err := GetWingetPath()
+	if err != nil {
+		return nil, err
+	}
+
+	env, err := buildWingetEnv(wingetPath)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, wingetPath, args...)
+	cmd.Dir = filepath.Dir(wingetPath)
+	cmd.Env = env
+
+	return cmd.CombinedOutput()
+}
+
+func buildWingetEnv(wingetPath string) ([]string, error) {
+	programFilesPath := os.Getenv("ProgramW6432")
+	if programFilesPath == "" {
+		programFilesPath = os.Getenv("ProgramFiles")
+	}
+	if programFilesPath == "" {
+		programFilesPath = "C:\\Program Files"
+	}
+
+	windowsAppsPath := filepath.Join(programFilesPath, "WindowsApps")
+	depPatterns := []string{
+		filepath.Join(windowsAppsPath, "Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe"),
+		filepath.Join(windowsAppsPath, "Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe"),
+	}
+
+	var depDirs []string
+	for _, pattern := range depPatterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve winget dependency pattern %q: %v", pattern, err)
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			iInfo, iErr := os.Stat(matches[i])
+			jInfo, jErr := os.Stat(matches[j])
+			if iErr != nil || jErr != nil {
+				return matches[i] > matches[j]
+			}
+			return iInfo.ModTime().After(jInfo.ModTime())
+		})
+		depDirs = append(depDirs, matches...)
+	}
+
+	wingetDir := filepath.Dir(wingetPath)
+	existingPath := os.Getenv("PATH")
+	pathParts := []string{wingetDir}
+	pathParts = append(pathParts, depDirs...)
+	if existingPath != "" {
+		pathParts = append(pathParts, existingPath)
+	}
+
+	return upsertEnv(os.Environ(), "PATH", strings.Join(pathParts, ";")), nil
+}
+
+func upsertEnv(env []string, key, value string) []string {
+	prefix := strings.ToUpper(key) + "="
+	for i := range env {
+		if strings.HasPrefix(strings.ToUpper(env[i]), prefix) {
+			env[i] = key + "=" + value
+			return env
+		}
+	}
+	return append(env, key+"="+value)
 }
 
 // CompareVersions compares two version strings, returns -1, 0, or 1

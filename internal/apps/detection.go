@@ -32,9 +32,10 @@ func CheckDetectionRule(rule models.DetectionRule) (bool, error) {
 			if value == "" {
 				return false, fmt.Errorf("file version check: missing 'value' in config")
 			}
-			// Get file version using PowerShell
+			// Read file version via LiteralPath and environment variable to avoid script injection.
 			cmd := exec.Command("powershell", "-NoProfile", "-Command",
-				fmt.Sprintf(`(Get-Item '%s').VersionInfo.FileVersion`, path))
+				`(Get-Item -LiteralPath $env:FLEETCTRL_DETECTION_PATH).VersionInfo.FileVersion`)
+			cmd.Env = append(os.Environ(), "FLEETCTRL_DETECTION_PATH="+path)
 			output, err := cmd.Output()
 			if err != nil {
 				return false, nil // File doesn't exist or has no version

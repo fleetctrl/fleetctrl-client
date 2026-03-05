@@ -89,8 +89,8 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 		if release.Winget == nil {
 			return fmt.Errorf("winget release data is missing")
 		}
-		if release.Winget.WingetID == "" {
-			return fmt.Errorf("winget ID is missing")
+		if err := validateWingetID(release.Winget.WingetID); err != nil {
+			return err
 		}
 
 		utils.Infof("Uninstalling winget app %s (version %s)...", release.Winget.WingetID, release.Version)
@@ -98,25 +98,17 @@ func UninstallApp(release models.AssignedRelease, serverURL string) error {
 		// Wait for any existing winget process to complete
 		waitForWingetLock(30 * time.Minute)
 
-		// Run winget uninstall via PowerShell (winget needs to run from its folder when running as SYSTEM)
-		psScript := fmt.Sprintf(`
-		$ProgressPreference = 'SilentlyContinue'
-		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
-		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
-		Push-Location $wingetDir
-		.\winget.exe uninstall --id "%s" --silent --force --accept-source-agreements --disable-interactivity
-		$exitCode = $LASTEXITCODE
-		Pop-Location
-		exit $exitCode
-		`, release.Winget.WingetID)
-
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		cmd.Stdout = log.Writer()
-		cmd.Stderr = log.Writer()
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("winget uninstall failed: %v", err)
+		output, err := runWingetCommand(
+			ctx,
+			"uninstall",
+			"--id", release.Winget.WingetID,
+			"--silent",
+			"--force",
+			"--accept-source-agreements",
+			"--disable-interactivity",
+		)
+		if err != nil {
+			return fmt.Errorf("winget uninstall failed: %v (output: %s)", err, strings.TrimSpace(string(output)))
 		}
 
 		utils.Infof("Successfully uninstalled winget app %s", release.Winget.WingetID)
@@ -141,6 +133,11 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		if !passed {
 			return fmt.Errorf("requirements not met, skipping installation")
 		}
+	}
+
+	// Run pre-install script if configured.
+	if err := runInstallScriptForPhase(release, serverURL, "pre"); err != nil {
+		return err
 	}
 
 	switch release.InstallerType {
@@ -173,17 +170,17 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 			return fmt.Errorf("install script failed: %v", err)
 		}
 
-		// check if app is installed
-
 		utils.Infof("Successfully installed win32 app (version %s)", release.Version)
-		return nil
 
 	case "winget":
 		if release.Winget == nil {
 			return fmt.Errorf("winget release data is missing")
 		}
-		if release.Winget.WingetID == "" {
-			return fmt.Errorf("winget ID is missing")
+		if err := validateWingetID(release.Winget.WingetID); err != nil {
+			return err
+		}
+		if err := validateWingetVersion(release.Version); err != nil {
+			return err
 		}
 
 		// Check if a higher version is already installed
@@ -205,38 +202,40 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		waitForWingetLock(30 * time.Minute)
 
 		// Build winget arguments
-		wingetArgs := fmt.Sprintf(`--id "%s" --silent --force --accept-package-agreements --accept-source-agreements --disable-interactivity`, release.Winget.WingetID)
+		wingetArgs := []string{
+			"install",
+			"--id", release.Winget.WingetID,
+			"--silent",
+			"--force",
+			"--accept-package-agreements",
+			"--accept-source-agreements",
+			"--disable-interactivity",
+		}
 		if release.Version != "" && release.Version != "latest" {
-			wingetArgs += fmt.Sprintf(` -v %s`, release.Version)
+			wingetArgs = append(wingetArgs, "-v", release.Version)
 		}
 
-		// Run winget install via PowerShell (winget needs to run from its folder when running as SYSTEM)
-		psScript := fmt.Sprintf(`
-		$ProgressPreference = 'SilentlyContinue'
-		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
-		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
-		Push-Location $wingetDir
-		.\winget.exe install %s
-		$exitCode = $LASTEXITCODE
-		Pop-Location
-		exit $exitCode
-		`, wingetArgs)
-
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		cmd.Stdout = log.Writer()
-		cmd.Stderr = log.Writer()
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("winget install failed: %v", err)
+		output, err := runWingetCommand(ctx, wingetArgs...)
+		if err != nil {
+			return fmt.Errorf("winget install failed: %v (output: %s)", err, strings.TrimSpace(string(output)))
 		}
 
 		utils.Infof("Successfully installed winget app %s", release.Winget.WingetID)
-		return nil
 
 	default:
 		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
 	}
+
+	// Run post-install script if configured.
+	if err := runInstallScriptForPhase(release, serverURL, "post"); err != nil {
+		utils.Errorf("Post-install script failed for release %s: %v. Attempting rollback uninstall...", release.ID, err)
+		if uninstallErr := UninstallApp(release, serverURL); uninstallErr != nil {
+			return fmt.Errorf("post-install script failed: %v; rollback uninstall failed: %v", err, uninstallErr)
+		}
+		return fmt.Errorf("post-install script failed: %v; rollback uninstall succeeded", err)
+	}
+
+	return nil
 }
 
 // UpgradeApp upgrades an application based on its release type
@@ -249,31 +248,24 @@ func UpgradeApp(release models.AssignedRelease) error {
 		if release.Winget == nil {
 			return fmt.Errorf("winget release data is missing")
 		}
-		if release.Winget.WingetID == "" {
-			return fmt.Errorf("winget ID is missing")
+		if err := validateWingetID(release.Winget.WingetID); err != nil {
+			return err
 		}
 
 		// Wait for any existing winget process to complete
 		waitForWingetLock(30 * time.Minute)
 
-		// Run winget upgrade via PowerShell
-		psScript := fmt.Sprintf(`
-		$ProgressPreference = 'SilentlyContinue'
-		$wingetDir = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-		$deps = Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "$env:ProgramFiles\WindowsApps\Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending
-		foreach ($dep in $deps) { $env:Path = "$($dep.FullName);$env:Path" }
-		Push-Location $wingetDir
-		.\winget.exe upgrade --id "%s" --silent --force --accept-package-agreements --accept-source-agreements --disable-interactivity
-		$exitCode = $LASTEXITCODE
-		Pop-Location
-		exit $exitCode
-		`, release.Winget.WingetID)
-
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		cmd.Stdout = log.Writer()
-		cmd.Stderr = log.Writer()
-
-		if err := cmd.Run(); err != nil {
+		output, err := runWingetCommand(
+			ctx,
+			"upgrade",
+			"--id", release.Winget.WingetID,
+			"--silent",
+			"--force",
+			"--accept-package-agreements",
+			"--accept-source-agreements",
+			"--disable-interactivity",
+		)
+		if err != nil {
 			if exitError, ok := err.(*exec.ExitError); ok {
 				// 0x8a15002b is the exit code for "No applicable update found"
 				if uint32(exitError.ExitCode()) == 0x8a15002b {
@@ -281,7 +273,7 @@ func UpgradeApp(release models.AssignedRelease) error {
 					return nil
 				}
 			}
-			return fmt.Errorf("winget upgrade failed: %v", err)
+			return fmt.Errorf("winget upgrade failed: %v (output: %s)", err, strings.TrimSpace(string(output)))
 		}
 
 		return nil
