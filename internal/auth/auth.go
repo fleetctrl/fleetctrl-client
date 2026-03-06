@@ -11,6 +11,11 @@ import (
 	"github.com/supabase-community/supabase-go"
 )
 
+var (
+	ErrInvalidRefreshToken = errors.New("invalid refresh token")
+	ErrRecoveryFailed      = errors.New("token recovery failed")
+)
+
 type AuthService struct {
 	client    *supabase.Client
 	serverURL string
@@ -73,6 +78,7 @@ func (as *AuthService) Enroll(enrollToken string) (Tokens, error) {
 	if err != nil {
 		return Tokens{}, err
 	}
+	defer res.Body.Close()
 
 	if res.StatusCode != 201 {
 		return Tokens{}, errors.New("POST error during computer registration")
@@ -114,6 +120,8 @@ func (as *AuthService) IsEnrolled() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer res.Body.Close()
+
 	if res.StatusCode != 200 {
 		return false, nil
 	}
@@ -126,16 +134,27 @@ func (as *AuthService) RefreshTokens(refreshToken string) (Tokens, error) {
 		Tokens Tokens `json:"tokens"`
 	}
 
-	res, err := utils.Post(as.serverURL+"/token/refresh", map[string]string{
-		"refresh_token": refreshToken,
-	}, map[string]string{
-		"Content-Type": "application/json",
-	})
+	url := as.serverURL + "/token/refresh"
+	dpop, _, err := CreateDPoPAtWithJTI("POST", url, "", time.Now())
 	if err != nil {
 		return Tokens{}, err
 	}
 
+	res, err := utils.Post(url, map[string]string{
+		"refresh_token": refreshToken,
+	}, map[string]string{
+		"Content-Type": "application/json",
+		"DPoP":         dpop,
+	})
+	if err != nil {
+		return Tokens{}, err
+	}
+	defer res.Body.Close()
+
 	if res.StatusCode != 200 {
+		if res.StatusCode == 401 {
+			return Tokens{}, ErrInvalidRefreshToken
+		}
 		return Tokens{}, errors.New("POST error during token update")
 	}
 
@@ -169,7 +188,12 @@ func (as *AuthService) RecoverTokens() (Tokens, error) {
 	if err != nil {
 		return Tokens{}, err
 	}
+	defer res.Body.Close()
+
 	if res.StatusCode != 200 {
+		if res.StatusCode == 401 {
+			return Tokens{}, ErrRecoveryFailed
+		}
 		return Tokens{}, errors.New("POST error during token recovery")
 	}
 

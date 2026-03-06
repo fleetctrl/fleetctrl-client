@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -27,6 +28,12 @@ type AuthTransport struct {
 
 	// local_time - server_time; used to adjust DPoP iat
 	serverSkew time.Duration
+
+	// Backoff and concurrency control for refresh/recover
+	refreshMu       sync.Mutex
+	lastAttempt     time.Time
+	backoffDuration time.Duration
+	invalidated     bool
 }
 
 // InitHTTPClient configures http.DefaultClient to use AuthTransport.
@@ -111,11 +118,10 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("Unable to refresh tokens")
 	}
 
-	if err := t.refreshLocked(rt); err != nil {
-		// If refresh failed, try recover flow once
-		if rerr := t.RecoverLocked(req.Context()); rerr != nil {
-			return nil, err
-		}
+	// Perform centralized refresh/recover with backoff and concurrency control
+	if err := t.ensureFreshTokens(req.Context(), rt); err != nil {
+		utils.Errorf("Token refresh/recovery failed: %v", err)
+		return nil, err
 	}
 
 	// Retry with fresh token
@@ -129,6 +135,104 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	t.setAuthHeaders(req2, at)
 	return base.RoundTrip(req2)
+}
+
+const (
+	minBackoff = 5 * time.Second
+	maxBackoff = 15 * time.Minute
+)
+
+// ensureFreshTokens attempts to refresh or recover tokens, respecting backoff and
+// preventing concurrent attempts.
+func (t *AuthTransport) ensureFreshTokens(ctx context.Context, failedRefreshToken string) error {
+	t.refreshMu.Lock()
+	defer t.refreshMu.Unlock()
+
+	// 1. Check if tokens were already refreshed by another goroutine
+	_, currentRT := t.currentTokens()
+	if currentRT != failedRefreshToken && currentRT != "" {
+		// Already refreshed, just proceed
+		return nil
+	}
+
+	// 2. Respect backoff
+	t.mu.Lock()
+	lastAttempt := t.lastAttempt
+	backoff := t.backoffDuration
+	isInvalidated := t.invalidated
+	t.mu.Unlock()
+
+	if isInvalidated {
+		// If current refresh token is known to be bad, we skip Refresh and go straight to Recover,
+		// but we still respect backoff for the whole auth subsystem.
+	}
+
+	if !lastAttempt.IsZero() {
+		elapsed := time.Since(lastAttempt)
+		if elapsed < backoff {
+			remaining := backoff - elapsed
+			utils.Infof("Auth backoff active, waiting %v...", remaining)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(remaining):
+			}
+		}
+	}
+
+	// 3. Attempt Refresh (if not invalidated)
+	var refreshErr error
+	if !isInvalidated {
+		refreshErr = t.refreshLocked(failedRefreshToken)
+		if refreshErr == nil {
+			t.resetBackoff()
+			return nil
+		}
+
+		if errors.Is(refreshErr, ErrInvalidRefreshToken) {
+			utils.Error("Refresh token rejected by server, invalidating...")
+			t.mu.Lock()
+			t.invalidated = true
+			t.mu.Unlock()
+		}
+	}
+
+	// 4. Attempt Recovery
+	utils.Info("Attempting token recovery flow...")
+	recoverErr := t.RecoverLocked(ctx)
+	if recoverErr == nil {
+		t.resetBackoff()
+		return nil
+	}
+
+	// 5. Update backoff on failure
+	t.increaseBackoff()
+	if refreshErr != nil {
+		return fmt.Errorf("refresh failed (%v) and recover failed (%v)", refreshErr, recoverErr)
+	}
+	return recoverErr
+}
+
+func (t *AuthTransport) resetBackoff() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lastAttempt = time.Now()
+	t.backoffDuration = 0
+	t.invalidated = false
+}
+
+func (t *AuthTransport) increaseBackoff() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lastAttempt = time.Now()
+	if t.backoffDuration == 0 {
+		t.backoffDuration = minBackoff
+	} else {
+		t.backoffDuration *= 2
+		if t.backoffDuration > maxBackoff {
+			t.backoffDuration = maxBackoff
+		}
+	}
 }
 
 // waitForServerOnline blocks until the server responds healthy, or context is canceled.
