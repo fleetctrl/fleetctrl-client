@@ -119,7 +119,7 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Perform centralized refresh/recover with backoff and concurrency control
-	if err := t.ensureFreshTokens(req.Context(), rt); err != nil {
+	if err := t.ensureFreshTokens(req.Context(), at, rt); err != nil {
 		utils.Errorf("Token refresh/recovery failed: %v", err)
 		return nil, err
 	}
@@ -144,13 +144,14 @@ const (
 
 // ensureFreshTokens attempts to refresh or recover tokens, respecting backoff and
 // preventing concurrent attempts.
-func (t *AuthTransport) ensureFreshTokens(ctx context.Context, failedRefreshToken string) error {
+func (t *AuthTransport) ensureFreshTokens(ctx context.Context, failedAccessToken, failedRefreshToken string) error {
 	t.refreshMu.Lock()
 	defer t.refreshMu.Unlock()
 
 	// 1. Check if tokens were already refreshed by another goroutine
-	_, currentRT := t.currentTokens()
-	if currentRT != failedRefreshToken && currentRT != "" {
+	currentAT, currentRT := t.currentTokens()
+	if (currentAT != "" && currentAT != failedAccessToken) ||
+		(currentRT != "" && currentRT != failedRefreshToken) {
 		// Already refreshed, just proceed
 		return nil
 	}
