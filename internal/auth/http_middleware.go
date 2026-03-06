@@ -10,6 +10,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -112,8 +114,21 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if err := t.refreshLocked(rt); err != nil {
-		// If refresh failed, try recover flow once
+		// If refresh yields unauthorized or another error, try recover flow once
 		if rerr := t.RecoverLocked(req.Context()); rerr != nil {
+			if errors.Is(rerr, ErrUnauthorized) {
+				utils.Errorf("Token recovery returned unauthorized, clearing tokens and stopping service to force re-enrollment")
+				t.clearTokens()
+
+				// Exit the process so the Windows service manager restarts it
+				// or leaves it stopped until an admin can manually re-enroll.
+				go func() {
+					time.Sleep(1 * time.Second)
+					os.Exit(1)
+				}()
+
+				return nil, rerr
+			}
 			return nil, err
 		}
 	}
@@ -182,6 +197,18 @@ func (t *AuthTransport) currentTokens() (access, refresh string) {
 	return t.Tokens.AccessToken, t.Tokens.RefreshToken
 }
 
+func (t *AuthTransport) clearTokens() {
+	t.mu.Lock()
+	if t.Tokens != nil {
+		t.Tokens.AccessToken = ""
+		t.Tokens.RefreshToken = ""
+	}
+	t.mu.Unlock()
+
+	tokenPath := filepath.Join(consts.ProgramDataDir, "tokens", "refresh_token.txt")
+	_ = os.Remove(tokenPath)
+}
+
 func (t *AuthTransport) refreshLocked(refreshToken string) error {
 	if t.AS == nil || t.Tokens == nil {
 		return errors.New("auth transport not initialized")
@@ -234,6 +261,11 @@ func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
 		return err
 	}
 	defer drainAndClose(res.Body)
+
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		return ErrUnauthorized
+	}
+
 	if res.StatusCode != http.StatusOK {
 		return errors.New("POST chyba pri obnoveni tokenu pres recover")
 	}
@@ -296,16 +328,19 @@ func drainAndClose(rc io.ReadCloser) {
 // isBypassedPath returns true for endpoints that should not be wrapped
 // by the auth middleware (no auto-refresh, no header injection).
 func isBypassedPath(path string) bool {
-	switch path {
-	case "/health", "/enroll", "/token/refresh", "/token/recover":
+	if strings.HasSuffix(path, "/health") ||
+		strings.HasSuffix(path, "/enroll") ||
+		strings.HasSuffix(path, "/token/refresh") ||
+		strings.HasSuffix(path, "/token/recover") {
 		return true
-	default:
-		// Also bypass client download paths to avoid recursion during updates
-		if strings.HasPrefix(path, "/client/download/") {
-			return true
-		}
-		return false
 	}
+
+	// Also bypass client download paths to avoid recursion during updates
+	if strings.Contains(path, "/client/download/") {
+		return true
+	}
+
+	return false
 }
 
 // checkForUpdate checks the response for update headers and triggers update if available

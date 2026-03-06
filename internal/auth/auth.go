@@ -3,13 +3,17 @@ package auth
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
 	"KiskaLE/RustDesk-ID/internal/utils"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/supabase-community/supabase-go"
 )
+
+var ErrUnauthorized = errors.New("unauthorized request")
 
 type AuthService struct {
 	client    *supabase.Client
@@ -62,17 +66,28 @@ func (as *AuthService) Enroll(enrollToken string) (Tokens, error) {
 		return Tokens{}, err
 	}
 
-	res, err := utils.Post(as.serverURL+"/enroll", map[string]string{
+	payload, err := json.Marshal(map[string]string{
 		"name":             computerName,
 		"fingerprint_hash": fingeprint,
 		"jkt":              jkt,
-	}, map[string]string{
-		"Content-Type":     "application/json",
-		"enrollment-token": enrollToken,
 	})
 	if err != nil {
 		return Tokens{}, err
 	}
+
+	req, err := http.NewRequest("POST", as.serverURL+"/enroll", bytes.NewBuffer(payload))
+	if err != nil {
+		return Tokens{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("enrollment-token", enrollToken)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return Tokens{}, err
+	}
+	defer res.Body.Close()
 
 	if res.StatusCode != 201 {
 		return Tokens{}, errors.New("POST error during computer registration")
@@ -108,12 +123,18 @@ func (as *AuthService) IsEnrolled() (bool, error) {
 		return false, errors.New("server is not active")
 	}
 
-	res, err := utils.Get(as.serverURL+"/enroll/"+fingerprint+"/is-enrolled", map[string]string{
-		"Content-Type": "application/json",
-	})
+	req, err := http.NewRequest("GET", as.serverURL+"/enroll/"+fingerprint+"/is-enrolled", nil)
 	if err != nil {
 		return false, err
 	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		return false, nil
 	}
@@ -121,18 +142,69 @@ func (as *AuthService) IsEnrolled() (bool, error) {
 	return true, nil
 }
 
+func doRequestWithBackoff(req *http.Request) (*http.Response, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	var res *http.Response
+	var err error
+
+	backoff := 1 * time.Second
+	maxBackoff := 60 * time.Second
+	maxRetries := 5
+
+	for i := 0; i < maxRetries; i++ {
+		if req.Body != nil && req.GetBody != nil {
+			rc, _ := req.GetBody()
+			req.Body = rc
+		}
+
+		res, err = client.Do(req)
+
+		if err == nil && res.StatusCode < 500 {
+			return res, nil
+		}
+
+		if res != nil {
+			res.Body.Close()
+		}
+
+		if i < maxRetries-1 {
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+
+	return res, err
+}
+
 func (as *AuthService) RefreshTokens(refreshToken string) (Tokens, error) {
 	type RefreshResponse struct {
 		Tokens Tokens `json:"tokens"`
 	}
 
-	res, err := utils.Post(as.serverURL+"/token/refresh", map[string]string{
+	payload, err := json.Marshal(map[string]string{
 		"refresh_token": refreshToken,
-	}, map[string]string{
-		"Content-Type": "application/json",
 	})
 	if err != nil {
 		return Tokens{}, err
+	}
+
+	req, err := http.NewRequest("POST", as.serverURL+"/token/refresh", bytes.NewBuffer(payload))
+	if err != nil {
+		return Tokens{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := doRequestWithBackoff(req)
+	if err != nil {
+		return Tokens{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		return Tokens{}, ErrUnauthorized
 	}
 
 	if res.StatusCode != 200 {
@@ -162,13 +234,23 @@ func (as *AuthService) RecoverTokens() (Tokens, error) {
 		return Tokens{}, err
 	}
 
-	res, err := utils.Post(url, map[string]string{}, map[string]string{
-		"Content-Type": "application/json",
-		"DPoP":         dpop,
-	})
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(`{}`)))
 	if err != nil {
 		return Tokens{}, err
 	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("DPoP", dpop)
+
+	res, err := doRequestWithBackoff(req)
+	if err != nil {
+		return Tokens{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		return Tokens{}, ErrUnauthorized
+	}
+
 	if res.StatusCode != 200 {
 		return Tokens{}, errors.New("POST error during token recovery")
 	}
