@@ -20,7 +20,7 @@
   <Package Name="FleetCtrl Client"
            Version="$(var.Version)"
            Manufacturer="FleetCtrl"
-           UpgradeCode="f47ac10b-58cc-4372-a567-0e02b2c3d479"
+           UpgradeCode="23fc5c33-666e-4344-a66a-7211b27d546d"
            Compressed="yes"
            InstallerVersion="500"
            Scope="perMachine">
@@ -43,7 +43,7 @@
          ══════════════════════════════════════════════════════════ -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLDIR" Name="fleetctrl">
-        <Component Id="ClientExeComp" Guid="b2c3d4e5-f6a7-8901-bcde-f12345678901" Bitness="always64">
+        <Component Id="ClientExeComp" Guid="7046ba26-a763-4172-9d16-1f2b33385152" Bitness="always64">
           <File Id="ClientExe"
                 Source="$(sys.SOURCEFILEDIR)..\bin\fleetctrl-client.exe"
                 Name="client.exe"
@@ -110,7 +110,7 @@
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
 
         <!-- Server URL input -->
-        <Control Id="ServerURLLabel" Type="Text" X="20" Y="65" Width="330" Height="13" NoPrefix="yes" Text="Server URL (e.g. https://fleet.example.com):" />
+        <Control Id="ServerURLLabel" Type="Text" X="20" Y="65" Width="330" Height="13" NoPrefix="yes" Text="Server URL (e.g. https://fleet.example.com/api):" />
         <Control Id="ServerURLEdit" Type="Edit" X="20" Y="80" Width="330" Height="18" Property="SERVER_URL" />
 
         <!-- Enrollment Token input -->
