@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	winreg "golang.org/x/sys/windows/registry"
@@ -95,6 +96,13 @@ func RemoveService() error {
 }
 
 func InstallService(enrollToken string, serverURL string) error {
+	serverURL = strings.TrimSpace(serverURL)
+	serverURL = strings.TrimRight(serverURL, "/")
+	if serverURL != "" && !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		serverURL = "https://" + serverURL
+	}
+	enrollToken = strings.TrimSpace(enrollToken)
+
 	// kontrola jestli je server dostupný
 	for i := 0; i < 3; i++ {
 		ping, err := utils.Ping(serverURL)

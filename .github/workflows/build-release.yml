@@ -64,7 +64,7 @@ jobs:
             -ext WixToolset.Util.wixext `
             -d Version=$version `
             -arch x64 `
-            -o bin/fleetctrl-client.msi
+            -o "bin/fleetctrl-client-$version.msi"
 
       - name: Create GitHub Release and Upload Asset
         uses: softprops/action-gh-release@v2
@@ -74,7 +74,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             ./bin/fleetctrl-client.exe
-            ./bin/fleetctrl-client.msi
+            ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.msi
           draft: false
           prerelease: false
           generate_release_notes: true
