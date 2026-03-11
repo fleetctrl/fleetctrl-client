@@ -24,9 +24,7 @@ Requires [WiX Toolset v4](https://wixtoolset.org/) installed globally via `dotne
 
 1. Install WiX v4 and required extensions:
    ```
-   dotnet tool install --global wix
    wix extension add -g WixToolset.UI.wixext
-   wix extension add -g WixToolset.Util.wixext
    ```
 2. Build the `.exe` first as shown above.
 3. Build the `.msi` file:
