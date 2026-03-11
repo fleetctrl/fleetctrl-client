@@ -317,6 +317,13 @@ func CopyExecutable() error {
 		return fmt.Errorf("chyba při získávání cesty k souboru: %v", err)
 	}
 
+	// Pokud source == target (např. MSI již soubor nainstaloval), přeskočit kopírování
+	targetPath := filepath.Join(consts.TargetDir, consts.TargetExeName)
+	if filepath.Clean(sourcePath) == filepath.Clean(targetPath) {
+		log.Printf("Soubor je již na cílovém místě (%s), přeskakuji kopírování.", sourcePath)
+		return nil
+	}
+
 	// pokud cílový adresář existuje, tak smazat
 	if _, err := os.Stat(consts.TargetDir); err == nil {
 		if err := os.RemoveAll(consts.TargetDir); err != nil {
@@ -330,7 +337,7 @@ func CopyExecutable() error {
 	}
 
 	// Sestavit cílovou cestu
-	targetPath := filepath.Join(consts.TargetDir, consts.TargetExeName)
+	targetPath = filepath.Join(consts.TargetDir, consts.TargetExeName)
 
 	// Zkopírovat soubor
 	input, err := os.ReadFile(sourcePath)

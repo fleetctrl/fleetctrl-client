@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  FleetCtrl Client MSI Installer (WiX v4)
+
+  Public properties (settable via CLI, Orca, or installer UI):
+    ENROLL_TOKEN  - Enrollment token for the FleetCtrl server
+    SERVER_URL    - FleetCtrl server URL (e.g. https://fleet.example.com)
+
+  CLI examples:
+    msiexec /i fleetctrl-client.msi ENROLL_TOKEN="abc123" SERVER_URL="https://fleet.example.com" /qn
+    msiexec /x fleetctrl-client.msi /qn
+
+  Build:
+    wix build installer/installer.wxs -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="FleetCtrl Client"
+           Version="$(var.Version)"
+           Manufacturer="FleetCtrl"
+           UpgradeCode="f47ac10b-58cc-4372-a567-0e02b2c3d479"
+           Compressed="yes"
+           InstallerVersion="500"
+           Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of FleetCtrl Client is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ══════════════════════════════════════════════════════════
+         Public Properties (UPPERCASE = settable via CLI / Orca)
+         ══════════════════════════════════════════════════════════ -->
+    <Property Id="ENROLL_TOKEN" Secure="yes" />
+    <Property Id="SERVER_URL" Secure="yes" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+
+    <!-- License for WixUI -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)license.rtf" />
+
+    <!-- ══════════════════════════════════════════════════════════
+         Directory Structure
+         ══════════════════════════════════════════════════════════ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="fleetctrl">
+        <Component Id="ClientExeComp" Guid="b2c3d4e5-f6a7-8901-bcde-f12345678901" Bitness="always64">
+          <File Id="ClientExe"
+                Source="$(sys.SOURCEFILEDIR)..\bin\fleetctrl-client.exe"
+                Name="client.exe"
+                KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="FleetCtrl Client" Level="1">
+      <ComponentRef Id="ClientExeComp" />
+    </Feature>
+
+    <!-- ══════════════════════════════════════════════════════════
+         Custom Actions (WixQuietExec64 from Util extension)
+         ══════════════════════════════════════════════════════════ -->
+
+    <!-- INSTALL SERVICE: set CustomActionData with formatted command line -->
+    <SetProperty Id="InstallServiceCA"
+                 Before="InstallServiceCA"
+                 Sequence="execute"
+                 Value="&quot;[INSTALLDIR]client.exe&quot; install --token &quot;[ENROLL_TOKEN]&quot; --url &quot;[SERVER_URL]&quot;" />
+
+    <!-- INSTALL SERVICE: deferred+elevated execution via WixQuietExec64 -->
+    <CustomAction Id="InstallServiceCA"
+                  DllEntry="WixQuietExec64"
+                  BinaryRef="Wix4UtilCA_X64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <!-- REMOVE SERVICE: set CustomActionData -->
+    <SetProperty Id="RemoveServiceCA"
+                 Before="RemoveServiceCA"
+                 Sequence="execute"
+                 Value="&quot;[INSTALLDIR]client.exe&quot; remove" />
+
+    <!-- REMOVE SERVICE: deferred+elevated execution -->
+    <CustomAction Id="RemoveServiceCA"
+                  DllEntry="WixQuietExec64"
+                  BinaryRef="Wix4UtilCA_X64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <!-- Schedule custom actions in the execute sequence -->
+    <InstallExecuteSequence>
+      <Custom Action="InstallServiceCA" After="InstallFiles" Condition="NOT Installed AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="RemoveServiceCA" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <!-- ══════════════════════════════════════════════════════════
+         User Interface
+         ══════════════════════════════════════════════════════════ -->
+    <UI Id="MyWixUI_InstallDir">
+      <!-- We pull in WixUI_InstallDir as a base so we have all standard dialogs -->
+      <ui:WixUI Id="WixUI_InstallDir" />
+
+      <!-- Custom configuration dialog for Token & URL -->
+      <Dialog Id="FleetCtrlConfigDlg" Width="370" Height="270" Title="FleetCtrl Client - Server Configuration">
+        <!-- Banner area -->
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Server Configuration" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Enter enrollment token and server URL." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <!-- Server URL input -->
+        <Control Id="ServerURLLabel" Type="Text" X="20" Y="65" Width="330" Height="13" NoPrefix="yes" Text="Server URL (e.g. https://fleet.example.com):" />
+        <Control Id="ServerURLEdit" Type="Edit" X="20" Y="80" Width="330" Height="18" Property="SERVER_URL" />
+
+        <!-- Enrollment Token input -->
+        <Control Id="TokenLabel" Type="Text" X="20" Y="115" Width="330" Height="13" NoPrefix="yes" Text="Enrollment Token:" />
+        <Control Id="TokenEdit" Type="Edit" X="20" Y="130" Width="330" Height="18" Property="ENROLL_TOKEN" />
+
+        <!-- Bottom buttons -->
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="InstallDirDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <!-- When Next is clicked, go to the VerifyReadyDlg -->
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <!-- Hook into the standard dialog sequence: InstallDirDlg -> FleetCtrlConfigDlg -> VerifyReadyDlg -->
+      
+      <!-- Override InstallDirDlg: Next goes to our Config dialog instead of VerifyReadyDlg -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="4" />
+
+      <!-- Override VerifyReadyDlg: Back goes to our Config dialog instead of InstallDirDlg -->
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="4" />
+    </UI>
+
+  </Package>
+</Wix>
