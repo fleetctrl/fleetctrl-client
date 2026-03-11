@@ -134,10 +134,10 @@
       <!-- Hook into the standard dialog sequence: InstallDirDlg -> FleetCtrlConfigDlg -> VerifyReadyDlg -->
       
       <!-- Override InstallDirDlg: Next goes to our Config dialog instead of VerifyReadyDlg -->
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="4" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="5" Condition="1" />
 
       <!-- Override VerifyReadyDlg: Back goes to our Config dialog instead of InstallDirDlg -->
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="4" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="5" Condition="1" />
     </UI>
 
   </Package>
