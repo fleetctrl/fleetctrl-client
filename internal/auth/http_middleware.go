@@ -4,6 +4,7 @@ import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
 	"KiskaLE/RustDesk-ID/internal/updater"
 	"KiskaLE/RustDesk-ID/internal/utils"
+	"KiskaLE/RustDesk-ID/internal/registry"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	winreg "golang.org/x/sys/windows/registry"
 )
 
 // AuthTransport is an http.RoundTripper that ensures Authorization and DPoP headers
@@ -367,6 +370,16 @@ func (t *AuthTransport) setAuthHeaders(req *http.Request, accessToken string) {
 		return
 	}
 	req.Header.Set("X-Client-Version", consts.Version)
+
+	// Check if installed via MSI
+	platform := "windows-exe"
+	if val, err := registry.GetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi"); err == nil {
+		if val != "" {
+			platform = "windows-msi"
+		}
+	}
+	req.Header.Set("X-Client-Platform", platform)
+
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	// Adjust iat by observed server skew
 	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()

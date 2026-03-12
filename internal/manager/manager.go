@@ -30,6 +30,12 @@ func RemoveService() error {
 		key.Close()
 	}
 
+	// Check if installed via MSI
+	if isMSI, err := registry.GetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi"); err == nil && isMSI != "" {
+		fmt.Println("POZOR: Tato instance byla nainstalována pomocí MSI. Manuální odstranění služby sice funguje, ale MSI balíček může zůstat v systému jako 'nainstalovaný'.")
+		fmt.Println("Doporučujeme provést odinstalaci přes 'Přidat nebo odebrat programy'.")
+	}
+
 	m, err := mgr.Connect()
 	if err != nil {
 		fmt.Printf("Chyba při připojení ke správci služeb: %v", err)
@@ -95,7 +101,7 @@ func RemoveService() error {
 	return nil
 }
 
-func InstallService(enrollToken string, serverURL string) error {
+func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 	serverURL = strings.TrimSpace(serverURL)
 	serverURL = strings.TrimRight(serverURL, "/")
 	if serverURL != "" && !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
@@ -163,6 +169,15 @@ func InstallService(enrollToken string, serverURL string) error {
 		return errors.New("chyba při nastavování hodnoty server_url v registru: " + err.Error())
 	}
 	key.Close()
+
+	if isMSI {
+		var msiKey = registry.RegistryValue{Type: registry.RegistryDword, Value: float64(1)}
+		key, err = registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi", msiKey)
+		if err != nil {
+			return errors.New("chyba při nastavování hodnoty installed_via_msi v registru: " + err.Error())
+		}
+		key.Close()
+	}
 
 	as := auth.NewAuthService(serverURL)
 	tokens, err := as.Enroll(enrollToken)

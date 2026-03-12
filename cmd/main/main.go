@@ -206,6 +206,7 @@ func main() {
 			installCmd := flag.NewFlagSet("install", flag.ExitOnError)
 			enrollToken := installCmd.String("token", "", "Enrollment token")
 			serverURL := installCmd.String("url", "", "Server URL")
+			isMSI := installCmd.Bool("msi", false, "Installed via MSI")
 
 			err := installCmd.Parse(os.Args[2:])
 			if err != nil {
@@ -216,7 +217,7 @@ func main() {
 				log.Fatalln("missing --token or --url")
 			}
 
-			err = manager.InstallService(*enrollToken, *serverURL)
+			err = manager.InstallService(*enrollToken, *serverURL, *isMSI)
 			if err != nil {
 				panic(err)
 			}
