@@ -61,13 +61,24 @@
          ══════════════════════════════════════════════════════════ -->
 
     <!-- INSTALL SERVICE: set CustomActionData with formatted command line -->
-    <SetProperty Id="InstallServiceCA"
-                 Before="InstallServiceCA"
-                 Sequence="execute"
-                 Value="&quot;[INSTALLDIR]client.exe&quot; install --token &quot;[ENROLL_TOKEN]&quot; --url &quot;[SERVER_URL]&quot;" />
+                  Value="&quot;[INSTALLDIR]client.exe&quot; install --token &quot;[ENROLL_TOKEN]&quot; --url &quot;[SERVER_URL]&quot; --msi" />
 
     <!-- INSTALL SERVICE: deferred+elevated execution via WixQuietExec64 -->
     <CustomAction Id="InstallServiceCA"
+                  DllEntry="WixQuietExec64"
+                  BinaryRef="Wix4UtilCA_X64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <!-- UPDATE SERVICE: set CustomActionData -->
+    <SetProperty Id="UpdateServiceCA"
+                 Before="UpdateServiceCA"
+                 Sequence="execute"
+                 Value="&quot;[INSTALLDIR]client.exe&quot; update" />
+
+    <!-- UPDATE SERVICE: deferred+elevated execution -->
+    <CustomAction Id="UpdateServiceCA"
                   DllEntry="WixQuietExec64"
                   BinaryRef="Wix4UtilCA_X64"
                   Execute="deferred"
@@ -90,7 +101,13 @@
 
     <!-- Schedule custom actions in the execute sequence -->
     <InstallExecuteSequence>
-      <Custom Action="InstallServiceCA" After="InstallFiles" Condition="NOT Installed AND NOT REMOVE~=&quot;ALL&quot;" />
+      <!-- Fresh Install: only if not already installed and no upgrade detected -->
+      <Custom Action="InstallServiceCA" After="InstallFiles" Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
+      
+      <!-- Upgrade: only if older version detected -->
+      <Custom Action="UpdateServiceCA" After="InstallFiles" Condition="WIX_UPGRADE_DETECTED AND NOT Installed" />
+      
+      <!-- Uninstall: only if removing and not part of an upgrade -->
       <Custom Action="RemoveServiceCA" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
 
@@ -133,11 +150,12 @@
 
       <!-- Hook into the standard dialog sequence: InstallDirDlg -> FleetCtrlConfigDlg -> VerifyReadyDlg -->
       
-      <!-- Override InstallDirDlg: Next goes to our Config dialog instead of VerifyReadyDlg -->
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="5" Condition="1" />
+      <!-- Skip config dialog if it's an upgrade -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="5" Condition="WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="6" Condition="NOT WIX_UPGRADE_DETECTED" />
 
-      <!-- Override VerifyReadyDlg: Back goes to our Config dialog instead of InstallDirDlg -->
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="5" Condition="1" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" Order="5" Condition="WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="FleetCtrlConfigDlg" Order="6" Condition="NOT WIX_UPGRADE_DETECTED" />
     </UI>
 
   </Package>
