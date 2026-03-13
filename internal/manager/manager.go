@@ -23,7 +23,7 @@ func RemoveService() error {
 	// Nastavení verze na 0
 	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", registry.RegistryValue{Type: registry.RegistryString, Value: "0"})
 	if err != nil {
-		fmt.Println("Chyba při nastavení verze: ", err)
+		log.Printf("Chyba při nastavení verze: %v", err)
 	}
 
 	if key != winreg.Key(0) {
@@ -32,30 +32,30 @@ func RemoveService() error {
 
 	// Check if installed via MSI
 	if isMSI, err := registry.GetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi"); err == nil && isMSI != "" {
-		fmt.Println("POZOR: Tato instance byla nainstalována pomocí MSI. Manuální odstranění služby sice funguje, ale MSI balíček může zůstat v systému jako 'nainstalovaný'.")
-		fmt.Println("Doporučujeme provést odinstalaci přes 'Přidat nebo odebrat programy'.")
+		log.Printf("POZOR: Tato instance byla nainstalována pomocí MSI. Manuální odstranění služby sice funguje, ale MSI balíček může zůstat v systému jako 'nainstalovaný'.")
+		log.Printf("Doporučujeme provést odinstalaci přes 'Přidat nebo odebrat programy'.")
 	}
 
 	m, err := mgr.Connect()
 	if err != nil {
-		fmt.Printf("Chyba při připojení ke správci služeb: %v", err)
+		log.Printf("Chyba při připojení ke správci služeb: %v", err)
 		return err
 	}
 	defer m.Disconnect()
 
 	s, err := m.OpenService(consts.ServiceName)
 	if err != nil {
-		fmt.Printf("Služba %s neexistuje nebo nelze otevřít: %v", consts.ServiceName, err)
+		log.Printf("Služba %s neexistuje nebo nelze otevřít: %v", consts.ServiceName, err)
 	} else {
 		defer s.Close()
 
 		// Nejdříve zastavit službu, pokud běží
 		status, err := s.Query()
 		if err == nil && status.State == svc.Running {
-			fmt.Println("Zastavuji běžící službu...")
+			log.Printf("Zastavuji běžící službu...")
 			_, err = s.Control(svc.Stop)
 			if err != nil {
-				fmt.Printf("Varování při zastavování služby: %v", err)
+				log.Printf("Varování při zastavování služby: %v", err)
 			} else {
 				// Počkat na zastavení služby
 				for i := 0; i < 30; i++ {
@@ -71,11 +71,11 @@ func RemoveService() error {
 		// Nyní smazat službu
 		err = s.Delete()
 		if err != nil {
-			fmt.Println("chyba při mazání služby: ", err)
+			log.Printf("chyba při mazání služby: %v", err)
 			return err
 		}
 		s.Close()
-		fmt.Println("Služba byla úspěšně smazána.")
+		log.Printf("Služba byla úspěšně smazána.")
 	}
 
 	time.Sleep(time.Duration(5) * time.Second)
@@ -85,7 +85,7 @@ func RemoveService() error {
 		if err == nil {
 			break
 		}
-		fmt.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
+		log.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 
@@ -95,7 +95,7 @@ func RemoveService() error {
 		if err == nil {
 			break
 		}
-		fmt.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
+		log.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 	return nil
@@ -113,10 +113,10 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 	for i := 0; i < 3; i++ {
 		ping, err := utils.Ping(serverURL)
 		if err == nil && ping {
-			fmt.Printf("Server %s je dostupný.\n", serverURL)
+			log.Printf("Server %s je dostupný.", serverURL)
 			break
 		}
-		fmt.Printf("Navázání připojení k serveru selhalo. Pokus %d/3.\n", i+1)
+		log.Printf("Navázání připojení k serveru selhalo. Pokus %d/3.", i+1)
 		time.Sleep(time.Duration(i+1) * time.Second)
 		if i == 2 {
 			return errors.New("Navazání připojení k serveru selhalo.")
@@ -210,16 +210,16 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 
 	defer s.Close()
 
-	fmt.Printf("Služba %s byla úspěšně vytvořena", consts.ServiceName)
+	log.Printf("Služba %s byla úspěšně vytvořena", consts.ServiceName)
 
 	// Spuštění služby s retry logikou
 	for i := 0; i < 3; i++ {
 		err = s.Start()
 		if err == nil {
-			fmt.Printf("Služba %s byla úspěšně spuštěna", consts.ServiceName)
+			log.Printf("Služba %s byla úspěšně spuštěna", consts.ServiceName)
 			break
 		}
-		fmt.Printf("Pokus %d/3 spuštění služby selhal: %v", i+1, err)
+		log.Printf("Pokus %d/3 spuštění služby selhal: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second)
 		if i == 2 {
 			return err
@@ -260,7 +260,7 @@ func TakeOwnershipAndDelete(path string) error {
 }
 
 func UpdateService() error {
-	fmt.Println("Zahajuji aktualizaci služby...")
+	log.Printf("Zahajuji aktualizaci služby...")
 
 	// Připojení ke správci služeb
 	m, err := mgr.Connect()
@@ -283,7 +283,7 @@ func UpdateService() error {
 	}
 
 	if status.State == svc.Running {
-		fmt.Println("Zastavuji běžící službu...")
+		log.Printf("Zastavuji běžící službu...")
 		_, err = s.Control(svc.Stop)
 		if err != nil {
 			return fmt.Errorf("chyba při zastavování služby: %v", err)
@@ -297,7 +297,7 @@ func UpdateService() error {
 				break
 			}
 		}
-		fmt.Println("Služba byla zastavena.")
+		log.Printf("Služba byla zastavena.")
 	}
 
 	// Krátká pauza pro uvolnění souborů
@@ -312,21 +312,21 @@ func UpdateService() error {
 	var versionKey = registry.RegistryValue{Type: registry.RegistryString, Value: consts.Version}
 	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
 	if err != nil {
-		fmt.Printf("Varování: chyba při aktualizaci verze v registru: %v\n", err)
+		log.Printf("Varování: chyba při aktualizaci verze v registru: %v", err)
 	} else {
 		key.Close()
 	}
 
 	// Spustit službu znovu
-	fmt.Println("Spouštím službu...")
+	log.Printf("Spouštím službu...")
 	for i := 0; i < 3; i++ {
 		err = s.Start()
 		if err == nil {
-			fmt.Printf("Služba %s byla úspěšně aktualizována a spuštěna.\n", consts.ServiceName)
-			fmt.Printf("Nová verze: %s\n", consts.Version)
+			log.Printf("Služba %s byla úspěšně aktualizována a spuštěna.", consts.ServiceName)
+			log.Printf("Nová verze: %s", consts.Version)
 			return nil
 		}
-		fmt.Printf("Pokus %d/3 spuštění služby selhal: %v\n", i+1, err)
+		log.Printf("Pokus %d/3 spuštění služby selhal: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 

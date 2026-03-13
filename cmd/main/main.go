@@ -11,9 +11,11 @@ import (
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	winreg "golang.org/x/sys/windows/registry"
@@ -171,6 +173,23 @@ type logWriter struct {
 	path string
 }
 
+func configureInstallerCommandLogging(explicitPath string) (string, error) {
+	logPath := strings.TrimSpace(explicitPath)
+	if logPath == "" {
+		logPath = filepath.Join(os.TempDir(), "FleetCtrlInstaller.log")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return "", fmt.Errorf("failed to create installer log directory: %w", err)
+	}
+
+	log.SetOutput(io.MultiWriter(os.Stderr, logWriter{path: logPath}))
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Printf("FleetCtrl installer command log: %s", logPath)
+
+	return logPath, nil
+}
+
 func (w logWriter) Write(p []byte) (n int, err error) {
 	// Check if rotation is needed
 	if info, err := os.Stat(w.path); err == nil {
@@ -207,32 +226,70 @@ func main() {
 			enrollToken := installCmd.String("token", "", "Enrollment token")
 			serverURL := installCmd.String("url", "", "Server URL")
 			isMSI := installCmd.Bool("msi", false, "Installed via MSI")
+			installerLog := installCmd.String("installer-log", "", "Installer log file path")
 
 			err := installCmd.Parse(os.Args[2:])
 			if err != nil {
 				log.Fatal(err)
 			}
 
+			logPath, err := configureInstallerCommandLogging(*installerLog)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to initialize installer logging: %v\n", err)
+				os.Exit(1)
+			}
+
 			if *enrollToken == "" || *serverURL == "" {
-				log.Fatalln("missing --token or --url")
+				log.Fatalf("missing --token or --url. See log: %s", logPath)
 			}
 
 			err = manager.InstallService(*enrollToken, *serverURL, *isMSI)
 			if err != nil {
-				panic(err)
+				log.Fatalf("install failed. See log: %s. Error: %v", logPath, err)
 			}
+			log.Printf("Install command completed successfully. Log: %s", logPath)
 			return
 		case "remove":
-			err := manager.RemoveService()
+			removeCmd := flag.NewFlagSet("remove", flag.ExitOnError)
+			installerLog := removeCmd.String("installer-log", "", "Installer log file path")
+
+			err := removeCmd.Parse(os.Args[2:])
 			if err != nil {
-				panic(err)
+				log.Fatal(err)
 			}
+
+			logPath, err := configureInstallerCommandLogging(*installerLog)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to initialize installer logging: %v\n", err)
+				os.Exit(1)
+			}
+
+			err = manager.RemoveService()
+			if err != nil {
+				log.Fatalf("remove failed. See log: %s. Error: %v", logPath, err)
+			}
+			log.Printf("Remove command completed successfully. Log: %s", logPath)
 			return
 		case "update":
-			err := manager.UpdateService()
+			updateCmd := flag.NewFlagSet("update", flag.ExitOnError)
+			installerLog := updateCmd.String("installer-log", "", "Installer log file path")
+
+			err := updateCmd.Parse(os.Args[2:])
 			if err != nil {
-				panic(err)
+				log.Fatal(err)
 			}
+
+			logPath, err := configureInstallerCommandLogging(*installerLog)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to initialize installer logging: %v\n", err)
+				os.Exit(1)
+			}
+
+			err = manager.UpdateService()
+			if err != nil {
+				log.Fatalf("update failed. See log: %s. Error: %v", logPath, err)
+			}
+			log.Printf("Update command completed successfully. Log: %s", logPath)
 			return
 		}
 	}
