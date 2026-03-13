@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"strconv"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -70,17 +71,21 @@ func SetRegisteryValue(registryType registry.Key, path string, name string, valu
 func GetRegisteryValue(registryType registry.Key, path string, name string) (string, error) {
 	var access uint32 = registry.QUERY_VALUE
 
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, access)
+	key, err := registry.OpenKey(registryType, path, access)
 	if err != nil {
 		return "", fmt.Errorf("failed to open registry key: %w", err)
 	}
-
-	value, _, err := key.GetStringValue(name)
-	if err != nil {
-		return "", fmt.Errorf("failed to get registry value: %w", err)
-	}
-
 	defer key.Close()
 
-	return value, nil
+	value, _, err := key.GetStringValue(name)
+	if err == nil {
+		return value, nil
+	}
+
+	intValue, _, err := key.GetIntegerValue(name)
+	if err == nil {
+		return strconv.FormatUint(intValue, 10), nil
+	}
+
+	return "", fmt.Errorf("failed to get registry value: %w", err)
 }

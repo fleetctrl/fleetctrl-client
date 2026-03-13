@@ -151,36 +151,45 @@ func (u *Updater) downloadUpdate(info *UpdateInfo) (string, error) {
 		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	// Create temp file without extension initially
-	tmpFile, err := os.CreateTemp("", "fleetctrl-update-*")
+	installerExt := u.getInstallerExtension(info, resp.Header.Get("Content-Type"))
+
+	// Create temp file with the final extension up-front. On Windows, renaming an
+	// open file handle can fail with a sharing violation, which breaks MSI updates.
+	tmpFile, err := os.CreateTemp("", "fleetctrl-update-*"+installerExt)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
 	defer tmpFile.Close()
 
 	// Download the binary
 	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		os.Remove(tmpFile.Name())
+		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to download: %w", err)
 	}
 
-	// Determine real extension from Content-Type or magic bytes
-	// For simplicity, we can check the Content-Disposition or just look at the first few bytes later
-	// But let's check Content-Type header first
-	contentType := resp.Header.Get("Content-Type")
-	finalPath := tmpFile.Name()
-	if contentType == "application/x-msi" || strings.HasSuffix(info.ID, ".msi") {
-		finalPath += ".msi"
-	} else {
-		finalPath += ".exe"
+	if err := tmpFile.Sync(); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to flush downloaded file: %w", err)
 	}
 
-	if err := os.Rename(tmpFile.Name(), finalPath); err != nil {
-		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("failed to rename temp file: %w", err)
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to close temp file: %w", err)
 	}
 
-	return finalPath, nil
+	return tmpPath, nil
+}
+
+func (u *Updater) getInstallerExtension(info *UpdateInfo, contentType string) string {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	updateID := strings.ToLower(strings.TrimSpace(info.ID))
+
+	if strings.Contains(contentType, "msi") || strings.HasSuffix(updateID, ".msi") || u.isMSIInstallation() {
+		return ".msi"
+	}
+
+	return ".exe"
 }
 
 // verifyHash verifies the SHA256 hash of the downloaded file
