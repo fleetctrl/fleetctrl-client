@@ -52,9 +52,13 @@ jobs:
       - name: Install WiX Toolset v4
         shell: pwsh
         run: |
-          dotnet tool install --global wix
-          wix extension add -g WixToolset.UI.wixext
-          wix extension add -g WixToolset.Util.wixext
+          $wixVersion = "4.0.0"
+          dotnet tool update --global wix --version $wixVersion
+          if ($LASTEXITCODE -ne 0) {
+            dotnet tool install --global wix --version $wixVersion
+          }
+          wix extension add -g "WixToolset.UI.wixext/$wixVersion"
+          wix extension add -g "WixToolset.Util.wixext/$wixVersion"
 
       - name: Build MSI
         shell: pwsh
