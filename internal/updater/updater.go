@@ -2,6 +2,7 @@ package updater
 
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
+	"KiskaLE/RustDesk-ID/internal/registry"
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	winreg "golang.org/x/sys/windows/registry"
 )
 
 // UpdateInfo contains information about an available update parsed from X-Client-Update header
@@ -148,20 +151,45 @@ func (u *Updater) downloadUpdate(info *UpdateInfo) (string, error) {
 		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	// Create temp file
-	tmpFile, err := os.CreateTemp("", "fleetctrl-update-*.exe")
+	installerExt := u.getInstallerExtension(info, resp.Header.Get("Content-Type"))
+
+	// Create temp file with the final extension up-front. On Windows, renaming an
+	// open file handle can fail with a sharing violation, which breaks MSI updates.
+	tmpFile, err := os.CreateTemp("", "fleetctrl-update-*"+installerExt)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
 	defer tmpFile.Close()
 
 	// Download the binary
 	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		os.Remove(tmpFile.Name())
+		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to download: %w", err)
 	}
 
-	return tmpFile.Name(), nil
+	if err := tmpFile.Sync(); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to flush downloaded file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	return tmpPath, nil
+}
+
+func (u *Updater) getInstallerExtension(info *UpdateInfo, contentType string) string {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	updateID := strings.ToLower(strings.TrimSpace(info.ID))
+
+	if strings.Contains(contentType, "msi") || strings.HasSuffix(updateID, ".msi") || u.isMSIInstallation() {
+		return ".msi"
+	}
+
+	return ".exe"
 }
 
 // verifyHash verifies the SHA256 hash of the downloaded file
@@ -192,14 +220,19 @@ func (u *Updater) verifyHash(filePath, expectedHash string) error {
 // The new binary will use manager.UpdateService() which properly handles
 // service stop/start via Windows SCM API
 func (u *Updater) applyUpdate(newBinaryPath, newVersion string) error {
-	utils.Infof("Launching new binary for self-update...")
+	utils.Infof("Launching update process for %s...", newBinaryPath)
 
-	// Run the new binary with "update" command
-	// This will:
-	// 1. Stop the running service via SCM
-	// 2. Copy itself to the target directory
-	// 3. Start the service again
-	cmd := exec.Command(newBinaryPath, "update")
+	var cmd *exec.Cmd
+	if strings.HasSuffix(strings.ToLower(newBinaryPath), ".msi") {
+		// Run msiexec for MSI update
+		utils.Infof("Applying MSI update using msiexec...")
+		cmd = exec.Command("msiexec", "/i", newBinaryPath, "/qn", "/norestart")
+	} else {
+		// Run the new binary with "update" command for EXE update
+		utils.Infof("Launching new binary for self-update...")
+		cmd = exec.Command(newBinaryPath, "update")
+	}
+
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
@@ -208,8 +241,14 @@ func (u *Updater) applyUpdate(newBinaryPath, newVersion string) error {
 		return fmt.Errorf("failed to start update process: %w", err)
 	}
 
-	utils.Infof("Update process started (PID: %d), service will restart with version %s", cmd.Process.Pid, newVersion)
+	utils.Infof("Update process started (PID: %d), version %s will be applied", cmd.Process.Pid, newVersion)
 	return nil
+}
+
+// isMSIInstallation returns true if the client was installed via MSI
+func (u *Updater) isMSIInstallation() bool {
+	val, err := registry.GetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi")
+	return err == nil && val != ""
 }
 
 // IsUpdatePath returns true if the path is an update-related endpoint
