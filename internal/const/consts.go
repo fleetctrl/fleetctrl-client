@@ -12,6 +12,7 @@ const (
 	TargetExeName      = "client.exe"
 	CompanyRegitryKey  = `SOFTWARE\fleetctrl`
 	RegisteryRootKey   = `SOFTWARE\fleetctrl\client`
+	DeviceIDValueName  = "DeviceID"
 	MaxLogSize         = 20 * 1024 * 1024 // 20 MB
 	AppInstallTimeout  = 30 * time.Minute
 )

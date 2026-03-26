@@ -19,7 +19,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-func RemoveService() error {
+func RemoveService(preserveDeviceID bool) error {
 	// Nastavení verze na 0
 	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", registry.RegistryValue{Type: registry.RegistryString, Value: "0"})
 	if err != nil {
@@ -28,6 +28,12 @@ func RemoveService() error {
 
 	if key != winreg.Key(0) {
 		key.Close()
+	}
+
+	if !preserveDeviceID {
+		if err := registry.DeleteRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, consts.DeviceIDValueName); err != nil {
+			log.Printf("Chyba při mazání DeviceID z registry: %v", err)
+		}
 	}
 
 	// Check if installed via MSI
@@ -136,7 +142,9 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 		// Služba existuje
 		s.Close()
 		// Spuštění odstranění služby
-		RemoveService()
+		if err := RemoveService(true); err != nil {
+			return err
+		}
 	}
 
 	// create folder
@@ -180,11 +188,22 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 	}
 
 	as := auth.NewAuthService(serverURL)
-	tokens, err := as.Enroll(enrollToken)
+	existingDeviceID, _, err := auth.LoadDeviceID()
+	if err != nil {
+		return errors.New("chyba při načítání DeviceID: " + err.Error())
+	}
+
+	enrollment, err := as.Enroll(enrollToken, existingDeviceID)
 	if err != nil {
 		return errors.New("chyba při registraci počítače: " + err.Error())
 	}
-	if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+	if enrollment.DeviceID == "" {
+		return errors.New("server nevrátil device ID")
+	}
+	if err := auth.SaveDeviceID(enrollment.DeviceID); err != nil {
+		return errors.New("chyba při ukládání DeviceID: " + err.Error())
+	}
+	if err := auth.SaveRefershToken(enrollment.Tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
 		return errors.New("chyba při ukládání klíče: " + err.Error())
 	}
 

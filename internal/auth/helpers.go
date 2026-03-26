@@ -2,6 +2,7 @@ package auth
 
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
+	appregistry "KiskaLE/RustDesk-ID/internal/registry"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -21,7 +22,7 @@ import (
 	"github.com/golang-jwt/jwt"
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v2/jwk"
-	"golang.org/x/sys/windows/registry"
+	winreg "golang.org/x/sys/windows/registry"
 )
 
 type win32ComputerSystemProduct struct {
@@ -76,11 +77,11 @@ func machineGUID() (string, error) {
 	const path = `SOFTWARE\Microsoft\Cryptography`
 
 	// Try 64-bit view first (even from 32-bit process).
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, path,
-		registry.QUERY_VALUE|registry.WOW64_64KEY)
+	k, err := winreg.OpenKey(winreg.LOCAL_MACHINE, path,
+		winreg.QUERY_VALUE|winreg.WOW64_64KEY)
 	if err != nil {
 		// Fallback: default view (works on 32-bit OS / some environments)
-		k, err = registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+		k, err = winreg.OpenKey(winreg.LOCAL_MACHINE, path, winreg.QUERY_VALUE)
 		if err != nil {
 			return "", err
 		}
@@ -101,6 +102,45 @@ func GetMachineGUID() (string, error) {
 
 func GetComputerFingerprint() string {
 	return getComputerUUID()
+}
+
+func SaveDeviceID(deviceID string) error {
+	trimmed := strings.TrimSpace(deviceID)
+	if trimmed == "" {
+		return errors.New("device ID is empty")
+	}
+
+	key, err := appregistry.SetRegisteryValue(
+		winreg.LOCAL_MACHINE,
+		consts.RegisteryRootKey,
+		consts.DeviceIDValueName,
+		appregistry.RegistryValue{Type: appregistry.RegistryString, Value: trimmed},
+	)
+	if err != nil {
+		return err
+	}
+	if key != winreg.Key(0) {
+		key.Close()
+	}
+
+	return nil
+}
+
+func LoadDeviceID() (string, bool, error) {
+	deviceID, exists, err := appregistry.GetOptionalRegisteryValue(
+		winreg.LOCAL_MACHINE,
+		consts.RegisteryRootKey,
+		consts.DeviceIDValueName,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	if !exists || deviceID == "" {
+		return "", false, nil
+	}
+
+	return deviceID, true, nil
 }
 
 // Auth

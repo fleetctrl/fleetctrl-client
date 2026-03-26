@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/supabase-community/supabase-go"
@@ -26,25 +27,30 @@ type Tokens struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+type Enrollment struct {
+	Tokens   Tokens
+	DeviceID string
+}
+
 func NewAuthService(serverURL string) *AuthService {
 	return &AuthService{serverURL: serverURL}
 }
 
-func (as *AuthService) Enroll(enrollToken string) (Tokens, error) {
+func (as *AuthService) Enroll(enrollToken string, deviceID string) (Enrollment, error) {
 	// check if registery key exists
 	fingeprint := GetComputerFingerprint()
 
 	// get PC name
 	computerName, err := utils.GetComputerName()
 	if err != nil {
-		return Tokens{}, err
+		return Enrollment{}, err
 	}
 
 	// check connection to server
 	ping, err := utils.Ping(as.serverURL)
 	if err != nil {
 		log.Printf("error checking connection to server: %v", err)
-		return Tokens{}, err
+		return Enrollment{}, err
 	}
 	for !ping {
 		log.Println("Server is unreachable. Waiting 1 minute for next attempt...")
@@ -52,7 +58,7 @@ func (as *AuthService) Enroll(enrollToken string) (Tokens, error) {
 		ping, err = utils.Ping(as.serverURL)
 		if err != nil {
 			log.Printf("error checking connection to server: %v", err)
-			return Tokens{}, err
+			return Enrollment{}, err
 		}
 	}
 
@@ -64,46 +70,56 @@ func (as *AuthService) Enroll(enrollToken string) (Tokens, error) {
 
 	jkt, err := JKTFromJWK(keys.pubKey)
 	if err != nil {
-		return Tokens{}, err
+		return Enrollment{}, err
 	}
 
-	res, err := utils.Post(as.serverURL+"/enroll", map[string]string{
+	payload := map[string]string{
 		"name":             computerName,
 		"fingerprint_hash": fingeprint,
 		"jkt":              jkt,
-	}, map[string]string{
+	}
+	if strings.TrimSpace(deviceID) != "" {
+		payload["device_id"] = strings.TrimSpace(deviceID)
+	}
+
+	res, err := utils.Post(as.serverURL+"/enroll", payload, map[string]string{
 		"Content-Type":     "application/json",
 		"enrollment-token": enrollToken,
 	})
 	if err != nil {
-		return Tokens{}, err
+		return Enrollment{}, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 201 {
-		return Tokens{}, errors.New("POST error during computer registration")
+		return Enrollment{}, errors.New("POST error during computer registration")
 	}
 
 	type EnrollResponse struct {
-		Tokens Tokens `json:"tokens"`
+		Tokens   Tokens `json:"tokens"`
+		DeviceID string `json:"device_id"`
 	}
 
 	// TODO get jwk from response
 	var jwk EnrollResponse
 	if err := json.NewDecoder(res.Body).Decode(&jwk); err != nil {
-		return Tokens{}, err
+		return Enrollment{}, err
 	}
 
-	tokens := Tokens{
-		AccessToken:  jwk.Tokens.AccessToken,
-		RefreshToken: jwk.Tokens.RefreshToken,
-	}
-
-	return tokens, nil
+	return Enrollment{
+		Tokens: Tokens{
+			AccessToken:  jwk.Tokens.AccessToken,
+			RefreshToken: jwk.Tokens.RefreshToken,
+		},
+		DeviceID: strings.TrimSpace(jwk.DeviceID),
+	}, nil
 }
 
-func (as *AuthService) IsEnrolled() (bool, error) {
-	fingerprint := GetComputerFingerprint()
+func (as *AuthService) IsEnrolled(deviceID string) (bool, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return false, errors.New("missing device ID")
+	}
 
 	active, err := utils.Ping(as.serverURL)
 	if err != nil {
@@ -114,7 +130,7 @@ func (as *AuthService) IsEnrolled() (bool, error) {
 		return false, errors.New("server is not active")
 	}
 
-	res, err := utils.Get(as.serverURL+"/enroll/"+fingerprint+"/is-enrolled", map[string]string{
+	res, err := utils.Get(as.serverURL+"/devices/"+deviceID+"/is-enrolled", map[string]string{
 		"Content-Type": "application/json",
 	})
 	if err != nil {

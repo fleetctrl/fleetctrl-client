@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -88,4 +89,34 @@ func GetRegisteryValue(registryType registry.Key, path string, name string) (str
 	}
 
 	return "", fmt.Errorf("failed to get registry value: %w", err)
+}
+
+func GetOptionalRegisteryValue(registryType registry.Key, path string, name string) (string, bool, error) {
+	value, err := GetRegisteryValue(registryType, path, name)
+	if err == nil {
+		return value, true, nil
+	}
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", false, nil
+	}
+	return "", false, err
+}
+
+func DeleteRegisteryValue(registryType registry.Key, path string, name string) error {
+	var access uint32 = registry.SET_VALUE
+
+	key, err := registry.OpenKey(registryType, path, access)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("failed to open registry key: %w", err)
+	}
+	defer key.Close()
+
+	if err := key.DeleteValue(name); err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return fmt.Errorf("failed to delete registry value: %w", err)
+	}
+
+	return nil
 }

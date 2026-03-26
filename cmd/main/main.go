@@ -49,6 +49,13 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 	as := auth.NewAuthService(serverURL)
 	ms := service.NewMainService(as, serverURL)
+	deviceID, hasDeviceID, err := auth.LoadDeviceID()
+	if err != nil {
+		log.Fatalln("error getting device ID from registry: ", err)
+	}
+	if !hasDeviceID {
+		log.Fatalln("DeviceID is missing. Re-enroll or reinstall the client.")
+	}
 
 	var registered bool
 	delay := 5 * time.Second
@@ -64,7 +71,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 			utils.Info("Ping failed: server unhealthy")
 		} else {
 			// Connection is good, check enrollment
-			registered, err = as.IsEnrolled()
+			registered, err = as.IsEnrolled(deviceID)
 			if err == nil {
 				// Success
 				break
@@ -252,6 +259,7 @@ func main() {
 		case "remove":
 			removeCmd := flag.NewFlagSet("remove", flag.ExitOnError)
 			installerLog := removeCmd.String("installer-log", "", "Installer log file path")
+			deleteDeviceID := removeCmd.Bool("delete-device-id", false, "Delete the persisted DeviceID from registry")
 
 			err := removeCmd.Parse(os.Args[2:])
 			if err != nil {
@@ -264,7 +272,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			err = manager.RemoveService()
+			err = manager.RemoveService(!*deleteDeviceID)
 			if err != nil {
 				log.Fatalf("remove failed. See log: %s. Error: %v", logPath, err)
 			}
@@ -311,9 +319,16 @@ func main() {
 
 		as := auth.NewAuthService(serverURL)
 		ms := service.NewMainService(as, serverURL)
+		deviceID, hasDeviceID, err := auth.LoadDeviceID()
+		if err != nil {
+			log.Fatalf("chyba při načítání DeviceID: %v", err)
+		}
+		if !hasDeviceID {
+			log.Fatalln("DeviceID chybí. Proveďte nové enrollnutí nebo reinstall klienta.")
+		}
 
 		// check if computer is registered
-		registered, err := as.IsEnrolled()
+		registered, err := as.IsEnrolled(deviceID)
 		if err != nil {
 			log.Fatalf("chyba při kontrole registrace: %v", err)
 		}
