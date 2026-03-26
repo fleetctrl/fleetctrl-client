@@ -87,11 +87,11 @@ func RemoveService(preserveDeviceID bool) error {
 	time.Sleep(time.Duration(5) * time.Second)
 
 	for i := 0; i < 3; i++ {
-		err = TakeOwnershipAndDelete(consts.ProgramDataDir)
+		err = cleanupProgramData(preserveDeviceID)
 		if err == nil {
 			break
 		}
-		log.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
+		log.Printf("Pokus %d/3 mazání dat selhal: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 
@@ -250,9 +250,12 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 
 func TakeOwnershipAndDelete(path string) error {
 	// zjistit jestli adresář existuje
-	_, err := os.Stat(path)
+	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return nil
+	}
+	if err != nil {
+		return err
 	}
 	// 1. Převzít vlastnictví
 	cmdTakeown := exec.Command("takeown", "/F", path, "/R", "/D", "Y")
@@ -269,10 +272,39 @@ func TakeOwnershipAndDelete(path string) error {
 	}
 
 	// 3. Smazat adresář/soubor
-	cmdRemove := exec.Command("cmd", "/C", "rd", "/S", "/Q", path)
+	removeArgs := []string{"/C", "del", "/F", "/Q", path}
+	if info.IsDir() {
+		removeArgs = []string{"/C", "rd", "/S", "/Q", path}
+	}
+	cmdRemove := exec.Command("cmd", removeArgs...)
 	out, err = cmdRemove.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("remove error: %v, output: %s", err, out)
+	}
+
+	return nil
+}
+
+func cleanupProgramData(preserveDeviceID bool) error {
+	if !preserveDeviceID {
+		return TakeOwnershipAndDelete(consts.ProgramDataDir)
+	}
+
+	entries, err := os.ReadDir(consts.ProgramDataDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == "certs" {
+			continue
+		}
+		if err := TakeOwnershipAndDelete(filepath.Join(consts.ProgramDataDir, entry.Name())); err != nil {
+			return err
+		}
 	}
 
 	return nil

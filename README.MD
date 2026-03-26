@@ -87,6 +87,7 @@ This stops and removes the `fleetctrl-client` service and attempts to clean up:
 - `C:\ProgramData\fleetctrl` (tokens and data)
 
 By default the uninstall keeps `HKLM\SOFTWARE\fleetctrl\client\DeviceID`, so a later reinstall can pair back to the same device record.
+When the DeviceID is preserved, FleetCtrl also keeps the device private key in `C:\ProgramData\fleetctrl\certs\priv.jwk` so reinstall can prove possession of the original device identity.
 
 To fully remove the device identity as well, run:
 

@@ -5,6 +5,7 @@ import (
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -37,13 +38,20 @@ func NewAuthService(serverURL string) *AuthService {
 }
 
 func (as *AuthService) Enroll(enrollToken string, deviceID string) (Enrollment, error) {
-	// check if registery key exists
-	fingeprint := GetComputerFingerprint()
-
 	// get PC name
 	computerName, err := utils.GetComputerName()
 	if err != nil {
 		return Enrollment{}, err
+	}
+
+	deviceID = strings.TrimSpace(deviceID)
+	enrollURL := as.serverURL + "/enroll"
+	headers := map[string]string{
+		"Content-Type":     "application/json",
+		"enrollment-token": enrollToken,
+	}
+	payload := map[string]string{
+		"name": computerName,
 	}
 
 	// check connection to server
@@ -62,30 +70,42 @@ func (as *AuthService) Enroll(enrollToken string, deviceID string) (Enrollment, 
 		}
 	}
 
-	keys, err := generateKeys()
-	if err != nil {
-		log.Fatal(err)
-	}
-	savePrivJWK(keys.privKey, consts.ProgramDataDir+"/certs", "priv.jwk")
+	if deviceID != "" {
+		priv, err := loadPrivJWK(consts.ProgramDataDir+"/certs", "priv.jwk")
+		if err != nil {
+			return Enrollment{}, fmt.Errorf("missing preserved device key for re-enrollment: %w", err)
+		}
 
-	jkt, err := JKTFromJWK(keys.pubKey)
-	if err != nil {
-		return Enrollment{}, err
+		jkt, err := JKTFromJWK(&priv.PublicKey)
+		if err != nil {
+			return Enrollment{}, err
+		}
+
+		dpop, _, err := CreateDPoPAtWithJTI("POST", enrollURL, "", time.Now())
+		if err != nil {
+			return Enrollment{}, fmt.Errorf("failed to create re-enrollment proof: %w", err)
+		}
+
+		headers["DPoP"] = dpop
+		payload["device_id"] = deviceID
+		payload["jkt"] = jkt
+	} else {
+		keys, err := generateKeys()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := savePrivJWK(keys.privKey, consts.ProgramDataDir+"/certs", "priv.jwk"); err != nil {
+			return Enrollment{}, err
+		}
+
+		jkt, err := JKTFromJWK(keys.pubKey)
+		if err != nil {
+			return Enrollment{}, err
+		}
+		payload["jkt"] = jkt
 	}
 
-	payload := map[string]string{
-		"name":             computerName,
-		"fingerprint_hash": fingeprint,
-		"jkt":              jkt,
-	}
-	if strings.TrimSpace(deviceID) != "" {
-		payload["device_id"] = strings.TrimSpace(deviceID)
-	}
-
-	res, err := utils.Post(as.serverURL+"/enroll", payload, map[string]string{
-		"Content-Type":     "application/json",
-		"enrollment-token": enrollToken,
-	})
+	res, err := utils.Post(enrollURL, payload, headers)
 	if err != nil {
 		return Enrollment{}, err
 	}
