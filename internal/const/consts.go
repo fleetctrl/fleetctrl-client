@@ -10,8 +10,8 @@ const (
 	TargetDir          = `C:\Program Files\fleetctrl`
 	ProgramDataDir     = `C:\ProgramData\fleetctrl`
 	TargetExeName      = "client.exe"
-	CompanyRegitryKey  = `SOFTWARE\WOW6432Node\fleetctrl`
-	RegisteryRootKey   = `SOFTWARE\WOW6432Node\fleetctrl\client`
+	CompanyRegitryKey  = `SOFTWARE\fleetctrl`
+	RegisteryRootKey   = `SOFTWARE\fleetctrl\client`
 	MaxLogSize         = 20 * 1024 * 1024 // 20 MB
 	AppInstallTimeout  = 30 * time.Minute
 )
