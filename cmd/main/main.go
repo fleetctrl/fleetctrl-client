@@ -252,7 +252,7 @@ func main() {
 
 			err = manager.InstallService(*enrollToken, *serverURL, *isMSI)
 			if err != nil {
-				log.Fatalf("install failed. See log: %s. Error: %v", logPath, err)
+				log.Fatalf("install failed. Error: %v", err)
 			}
 			log.Printf("Install command completed successfully. Log: %s", logPath)
 			return
