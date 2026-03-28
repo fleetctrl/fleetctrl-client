@@ -13,11 +13,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"golang.org/x/sys/windows"
 	winreg "golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 )
@@ -225,6 +228,59 @@ func (w logWriter) Write(p []byte) (n int, err error) {
 	return f.Write(p)
 }
 
+func logInstallerExecutionContext(commandName string, serverURL string, isMSI bool) {
+	exePath, exeErr := os.Executable()
+	if exeErr != nil {
+		exePath = fmt.Sprintf("<error: %v>", exeErr)
+	}
+
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		cwd = fmt.Sprintf("<error: %v>", cwdErr)
+	}
+
+	username := "<unknown>"
+	userSID := "<unknown>"
+	if currentUser, err := user.Current(); err == nil {
+		if strings.TrimSpace(currentUser.Username) != "" {
+			username = currentUser.Username
+		}
+		if strings.TrimSpace(currentUser.Uid) != "" {
+			userSID = currentUser.Uid
+		}
+	} else {
+		username = fmt.Sprintf("<error: %v>", err)
+		userSID = fmt.Sprintf("<error: %v>", err)
+	}
+
+	elevated := false
+	if token := windows.GetCurrentProcessToken(); token != 0 {
+		elevated = token.IsElevated()
+	}
+
+	proxyInfo := "<not checked>"
+	trimmedServerURL := strings.TrimSpace(serverURL)
+	if trimmedServerURL != "" {
+		probeURL := strings.TrimRight(trimmedServerURL, "/") + "/health"
+		if req, err := http.NewRequest(http.MethodGet, probeURL, nil); err == nil {
+			if proxyURL, err := http.ProxyFromEnvironment(req); err != nil {
+				proxyInfo = fmt.Sprintf("proxy lookup error: %v", err)
+			} else if proxyURL != nil {
+				proxyInfo = proxyURL.String()
+			} else {
+				proxyInfo = "DIRECT"
+			}
+		} else {
+			proxyInfo = fmt.Sprintf("request build error: %v", err)
+		}
+	}
+
+	log.Printf("Installer context: command=%s isMSI=%v exe=%s cwd=%s", commandName, isMSI, exePath, cwd)
+	log.Printf("Installer context: user=%s sid=%s elevated=%v temp=%s", username, userSID, elevated, os.TempDir())
+	log.Printf("Installer context: USERNAME=%q USERDOMAIN=%q TEMP=%q TMP=%q SYSTEMROOT=%q", os.Getenv("USERNAME"), os.Getenv("USERDOMAIN"), os.Getenv("TEMP"), os.Getenv("TMP"), os.Getenv("SystemRoot"))
+	log.Printf("Installer context: serverURL=%q proxy=%s", trimmedServerURL, proxyInfo)
+}
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -245,6 +301,8 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Failed to initialize installer logging: %v\n", err)
 				os.Exit(1)
 			}
+
+			logInstallerExecutionContext("install", *serverURL, *isMSI)
 
 			if *enrollToken == "" || *serverURL == "" {
 				log.Fatalf("missing --token or --url. See log: %s", logPath)
@@ -272,6 +330,8 @@ func main() {
 				os.Exit(1)
 			}
 
+			logInstallerExecutionContext("remove", "", false)
+
 			err = manager.RemoveService(!*deleteDeviceID)
 			if err != nil {
 				log.Fatalf("remove failed. See log: %s. Error: %v", logPath, err)
@@ -292,6 +352,8 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Failed to initialize installer logging: %v\n", err)
 				os.Exit(1)
 			}
+
+			logInstallerExecutionContext("update", "", false)
 
 			err = manager.UpdateService()
 			if err != nil {
