@@ -206,8 +206,6 @@ func (as *AuthService) RecoverTokens() (Tokens, error) {
 	}
 	defer res.Body.Close()
 
-	utils.Error(res)
-
 	if res.StatusCode != 200 {
 		if res.StatusCode == 401 {
 			return Tokens{}, ErrRecoveryFailed
