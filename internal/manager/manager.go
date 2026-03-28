@@ -192,19 +192,47 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 	if err != nil {
 		return errors.New("chyba při načítání DeviceID: " + err.Error())
 	}
+	privKeyPath := filepath.Join(consts.ProgramDataDir, "certs", "priv.jwk")
+	privKeyInfo, statErr := os.Stat(privKeyPath)
+	privKeyExist := statErr == nil && !privKeyInfo.IsDir()
 
-	enrollment, err := as.Enroll(enrollToken, existingDeviceID)
-	if err != nil {
-		return errors.New("chyba při registraci počítače: " + err.Error())
+	// pokus o obnovu připojení
+	recoverFailed := false
+	if existingDeviceID != "" && privKeyExist {
+		isEnrolled, err := as.IsEnrolled(existingDeviceID)
+		if err != nil {
+			utils.Error("chyba při kontrole registrace zařízení:", err)
+			recoverFailed = true
+		}
+		if isEnrolled {
+			if nt, rerr := as.RecoverTokens(); rerr == nil {
+				tokens := nt
+				if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+					utils.Error("warning: failed to save refresh token after recover:", err)
+					recoverFailed = true
+				}
+			} else {
+				utils.Error("token recover failed:", rerr)
+				recoverFailed = true
+			}
+		}
 	}
-	if enrollment.DeviceID == "" {
-		return errors.New("server nevrátil device ID")
-	}
-	if err := auth.SaveDeviceID(enrollment.DeviceID); err != nil {
-		return errors.New("chyba při ukládání DeviceID: " + err.Error())
-	}
-	if err := auth.SaveRefershToken(enrollment.Tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-		return errors.New("chyba při ukládání klíče: " + err.Error())
+
+	// Pokud obnova selže nebo zařízení není zaregistrováno, tak zaregistrovat znovu
+	if recoverFailed || existingDeviceID == "" || !privKeyExist {
+		enrollment, err := as.Enroll(enrollToken)
+		if err != nil {
+			return errors.New("chyba při registraci počítače: " + err.Error())
+		}
+		if enrollment.DeviceID == "" {
+			return errors.New("server nevrátil device ID")
+		}
+		if err := auth.SaveDeviceID(enrollment.DeviceID); err != nil {
+			return errors.New("chyba při ukládání DeviceID: " + err.Error())
+		}
+		if err := auth.SaveRefershToken(enrollment.Tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+			return errors.New("chyba při ukládání klíče: " + err.Error())
+		}
 	}
 
 	// Kopírování souboru

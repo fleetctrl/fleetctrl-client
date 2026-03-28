@@ -5,7 +5,6 @@ import (
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ var (
 type AuthService struct {
 	client    *supabase.Client
 	serverURL string
+	timeState serverTimeState
 }
 
 type Tokens struct {
@@ -37,14 +37,13 @@ func NewAuthService(serverURL string) *AuthService {
 	return &AuthService{serverURL: serverURL}
 }
 
-func (as *AuthService) Enroll(enrollToken string, deviceID string) (Enrollment, error) {
+func (as *AuthService) Enroll(enrollToken string) (Enrollment, error) {
 	// get PC name
 	computerName, err := utils.GetComputerName()
 	if err != nil {
 		return Enrollment{}, err
 	}
 
-	deviceID = strings.TrimSpace(deviceID)
 	enrollURL := as.serverURL + "/enroll"
 	headers := map[string]string{
 		"Content-Type":     "application/json",
@@ -70,40 +69,19 @@ func (as *AuthService) Enroll(enrollToken string, deviceID string) (Enrollment, 
 		}
 	}
 
-	if deviceID != "" {
-		priv, err := loadPrivJWK(consts.ProgramDataDir+"/certs", "priv.jwk")
-		if err != nil {
-			return Enrollment{}, fmt.Errorf("missing preserved device key for re-enrollment: %w", err)
-		}
-
-		jkt, err := JKTFromJWK(&priv.PublicKey)
-		if err != nil {
-			return Enrollment{}, err
-		}
-
-		dpop, _, err := CreateDPoPAtWithJTI("POST", enrollURL, "", time.Now())
-		if err != nil {
-			return Enrollment{}, fmt.Errorf("failed to create re-enrollment proof: %w", err)
-		}
-
-		headers["DPoP"] = dpop
-		payload["device_id"] = deviceID
-		payload["jkt"] = jkt
-	} else {
-		keys, err := generateKeys()
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err := savePrivJWK(keys.privKey, consts.ProgramDataDir+"/certs", "priv.jwk"); err != nil {
-			return Enrollment{}, err
-		}
-
-		jkt, err := JKTFromJWK(keys.pubKey)
-		if err != nil {
-			return Enrollment{}, err
-		}
-		payload["jkt"] = jkt
+	keys, err := generateKeys()
+	if err != nil {
+		log.Fatal(err)
 	}
+	if err := savePrivJWK(keys.privKey, consts.ProgramDataDir+"/certs", "priv.jwk"); err != nil {
+		return Enrollment{}, err
+	}
+
+	jkt, err := JKTFromJWK(keys.pubKey)
+	if err != nil {
+		return Enrollment{}, err
+	}
+	payload["jkt"] = jkt
 
 	res, err := utils.Post(enrollURL, payload, headers)
 	if err != nil {
@@ -171,7 +149,8 @@ func (as *AuthService) RefreshTokens(refreshToken string) (Tokens, error) {
 	}
 
 	url := as.serverURL + "/token/refresh"
-	dpop, _, err := CreateDPoPAtWithJTI("POST", url, "", time.Now())
+	as.syncServerSkew()
+	dpop, _, err := CreateDPoPAtWithJTI("POST", url, "", as.currentDPoPIssuedAt())
 	if err != nil {
 		return Tokens{}, err
 	}
@@ -212,7 +191,8 @@ func (as *AuthService) RecoverTokens() (Tokens, error) {
 	url := as.serverURL + "/token/recover"
 
 	// Build DPoP for POST without access token (no auth)
-	dpop, _, err := CreateDPoPAtWithJTI("POST", url, "", time.Now())
+	as.syncServerSkew()
+	dpop, _, err := CreateDPoPAtWithJTI("POST", url, "", as.currentDPoPIssuedAt())
 	if err != nil {
 		return Tokens{}, err
 	}
@@ -225,6 +205,8 @@ func (as *AuthService) RecoverTokens() (Tokens, error) {
 		return Tokens{}, err
 	}
 	defer res.Body.Close()
+
+	utils.Error(res)
 
 	if res.StatusCode != 200 {
 		if res.StatusCode == 401 {
