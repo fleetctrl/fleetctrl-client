@@ -119,9 +119,7 @@ func SaveDeviceID(deviceID string) error {
 	if err != nil {
 		return err
 	}
-	if key != winreg.Key(0) {
-		key.Close()
-	}
+	key.Close()
 
 	return nil
 }

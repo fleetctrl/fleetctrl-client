@@ -24,9 +24,7 @@ func RemoveService(preserveDeviceID bool) error {
 	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", registry.RegistryValue{Type: registry.RegistryString, Value: "0"})
 	if err != nil {
 		log.Printf("Chyba při nastavení verze: %v", err)
-	}
-
-	if key != winreg.Key(0) {
+	} else {
 		key.Close()
 	}
 
