@@ -98,9 +98,11 @@ func (ms *MainService) StartRustDeskServerSync() {
 		if res.StatusCode != 200 {
 			// parse body
 			utils.Error("Server returned status code: ", utils.ParseHttpError(res))
+			res.Body.Close()
 			time.Sleep(15 * time.Minute)
 			continue
 		}
+		res.Body.Close()
 		time.Sleep(5 * time.Minute)
 	}
 }
@@ -126,10 +128,12 @@ func (ms *MainService) StartRustDeskServerTasks() {
 
 		var data models.TaskResponse
 		if err := json.NewDecoder(tasksRes.Body).Decode(&data); err != nil {
+			tasksRes.Body.Close()
 			utils.Error(err)
 			time.Sleep(5 * time.Minute)
 			continue
 		}
+		tasksRes.Body.Close()
 		tasksList := data.Tasks
 
 		for i := range tasksList {
@@ -137,52 +141,62 @@ func (ms *MainService) StartRustDeskServerTasks() {
 			switch task.Task {
 			case "SET_PASSWD":
 				// set task started
-				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+				if patchRes, patchErr := utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 					"status": "IN_PROGRESS",
 					"error":  "",
 				}, map[string]string{
 					"Content-Type": "application/json",
-				})
+				}); patchErr == nil && patchRes != nil {
+					patchRes.Body.Close()
+				}
 				var d models.SetPasswordTask
 				if err := json.Unmarshal(task.TaskData, &d); err != nil {
 					log.Println(err)
+					continue
 				}
 
-				// set passwor using powershell
+				// set password using powershell
 				cmd := exec.Command("C:\\Program Files\\RustDesk\\RustDesk.exe", "--password", d.Password)
 				cmd.Stdout = log.Writer()
 				cmd.Stderr = log.Writer()
 				err := cmd.Run()
 				if err != nil {
 					log.Println(err)
-					utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+					if patchRes, patchErr := utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 						"status": "ERROR",
 						"error":  err.Error(),
 					}, map[string]string{
 						"Content-Type": "application/json",
-					})
+					}); patchErr == nil && patchRes != nil {
+						patchRes.Body.Close()
+					}
 					break
 				}
 				utils.Info("Password set")
 
-				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+				if patchRes, patchErr := utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 					"status": "SUCCESS",
 					"error":  "",
 				}, map[string]string{
 					"Content-Type": "application/json",
-				})
+				}); patchErr == nil && patchRes != nil {
+					patchRes.Body.Close()
+				}
 
 			case "SET_NETWORK_STRING":
 				// set task started
-				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+				if patchRes, patchErr := utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 					"status": "IN_PROGRESS",
 					"error":  "",
 				}, map[string]string{
 					"Content-Type": "application/json",
-				})
+				}); patchErr == nil && patchRes != nil {
+					patchRes.Body.Close()
+				}
 				var d models.SetNetworkStringTask
 				if err := json.Unmarshal(task.TaskData, &d); err != nil {
 					log.Println(err)
+					continue
 				}
 				cleanString := strings.TrimLeft(d.NetworkString, "=")
 				// set network using powershell
@@ -192,22 +206,26 @@ func (ms *MainService) StartRustDeskServerTasks() {
 				err := cmd.Run()
 				if err != nil {
 					log.Println(err)
-					utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+					if patchRes, patchErr := utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 						"status": "ERROR",
 						"error":  err.Error(),
 					}, map[string]string{
 						"Content-Type": "application/json",
-					})
+					}); patchErr == nil && patchRes != nil {
+						patchRes.Body.Close()
+					}
 					break
 				}
 				utils.Info("Network string set")
 
-				utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
+				if patchRes, patchErr := utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 					"status": "SUCCESS",
 					"error":  "",
 				}, map[string]string{
 					"Content-Type": "application/json",
-				})
+				}); patchErr == nil && patchRes != nil {
+					patchRes.Body.Close()
+				}
 
 			}
 		}
@@ -264,6 +282,10 @@ func (ms *MainService) StartApplicationsManagement() {
 
 		for _, app := range assignedAppsResponse.Apps {
 			utils.Info("Processing app: ", app.DisplayName)
+			if len(app.Releases) == 0 {
+				utils.Errorf("App %s has no releases, skipping", app.DisplayName)
+				continue
+			}
 			newestRelease := app.Releases[len(app.Releases)-1]
 			if newestRelease.AssignType == "exclude" {
 				continue
@@ -328,7 +350,14 @@ func (ms *MainService) StartApplicationsManagement() {
 							continue
 						}
 
-						if installed {
+						// Check if this previous version is actually installed before uninstalling
+						prevInstalled, prevErr := apps.IsAppInstalled(release)
+						if prevErr != nil {
+							utils.Errorf("Failed to check if previous version %s is installed: %v", release.Version, prevErr)
+							continue
+						}
+
+						if prevInstalled {
 							utils.Info("Previous version is installed, uninstalling...")
 
 							// Check backoff for uninstall
@@ -377,7 +406,7 @@ func (ms *MainService) StartApplicationsManagement() {
 				}
 
 			case "uninstall":
-				// check if application is unisntalled
+				// check if application is uninstalled
 				installed, err := apps.IsAppInstalled(newestRelease)
 				if err != nil {
 					log.Println(err)
@@ -389,36 +418,42 @@ func (ms *MainService) StartApplicationsManagement() {
 					continue
 				}
 
-				// application is installed
-				// uninstall application
+				// application is installed — try to uninstall each release version that is present
 				for _, release := range app.Releases {
-					if installed {
-						log.Println("Previous version is installed, uninstalling...")
-
-						// Check backoff
-						shouldAttempt, err := database.ShouldAttemptApp(release.ID)
-						if err != nil {
-							utils.Errorf("Failed to check backoff: %v", err)
-							shouldAttempt = true
-						}
-						if !shouldAttempt {
-							utils.Infof("Skipping uninstallation of %s due to backoff after multiple failures", app.DisplayName)
-							continue
-						}
-
-						if err := apps.UninstallApp(release, ms.serverURL); err != nil {
-							log.Printf("Failed to uninstall previous version: %v", err)
-							database.RecordAppFailure(release.ID)
-							ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil)
-						} else {
-							database.ResetAppFailures(release.ID)
-							ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateUninstalled, nil)
-						}
-						break
+					releaseInstalled, relErr := apps.IsAppInstalled(release)
+					if relErr != nil {
+						utils.Errorf("Failed to check if release %s is installed: %v", release.Version, relErr)
+						continue
 					}
+					if !releaseInstalled {
+						continue
+					}
+
+					utils.Infof("Version %s is installed, uninstalling...", release.Version)
+
+					// Check backoff
+					shouldAttempt, err := database.ShouldAttemptApp(release.ID)
+					if err != nil {
+						utils.Errorf("Failed to check backoff: %v", err)
+						shouldAttempt = true
+					}
+					if !shouldAttempt {
+						utils.Infof("Skipping uninstallation of %s due to backoff after multiple failures", app.DisplayName)
+						continue
+					}
+
+					if err := apps.UninstallApp(release, ms.serverURL); err != nil {
+						log.Printf("Failed to uninstall version %s: %v", release.Version, err)
+						database.RecordAppFailure(release.ID)
+						ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil)
+					} else {
+						database.ResetAppFailures(release.ID)
+						ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateUninstalled, nil)
+					}
+					break
 				}
 
-				// check if application is unisntalled
+				// check if application is uninstalled
 				installed, err = apps.IsAppInstalled(newestRelease)
 				if err != nil {
 					utils.Errorf("Failed to check if app is installed: %v", err)

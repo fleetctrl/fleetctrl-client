@@ -45,27 +45,30 @@ func SetRegisteryValue(registryType registry.Key, path string, name string, valu
 	case RegistryDword:
 		err = key.SetDWordValue(name, uint32(value.Value.(float64)))
 		if err != nil {
+			key.Close()
 			return 0, fmt.Errorf("failed to set registry value: %w", err)
 		}
 	case RegistryQword:
 		err = key.SetQWordValue(name, uint64(value.Value.(float64)))
 		if err != nil {
+			key.Close()
 			return 0, fmt.Errorf("failed to set registry value: %w", err)
 		}
 	case RegistryBinary:
 		err = key.SetBinaryValue(name, value.Value.([]byte))
 		if err != nil {
+			key.Close()
 			return 0, fmt.Errorf("failed to set registry value: %w", err)
 		}
 	case RegistryString:
 		err = key.SetStringValue(name, value.Value.(string))
 		if err != nil {
+			key.Close()
 			return 0, fmt.Errorf("failed to set registry value: %w", err)
 		}
 	}
 
-	defer key.Close()
-
+	// NOTE: key is NOT closed here — caller is responsible for closing it.
 	return key, nil
 }
 

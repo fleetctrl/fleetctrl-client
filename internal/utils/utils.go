@@ -66,6 +66,7 @@ func Ping(host string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		return false, nil
 	}

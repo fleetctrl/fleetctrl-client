@@ -28,8 +28,6 @@ import (
 type serviceHandler struct{}
 
 func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop}
-
 	// Mark service as running and accept Stop/Shutdown
 	changes <- svc.Status{
 		State:   svc.Running,
@@ -448,6 +446,7 @@ func main() {
 
 		go ms.StartRustDeskServerSync()
 		go ms.StartRustDeskServerTasks()
+		go ms.StartApplicationsManagement()
 		for {
 			time.Sleep(1 * time.Hour)
 		}
