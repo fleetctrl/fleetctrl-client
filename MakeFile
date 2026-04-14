@@ -6,6 +6,27 @@ build:
 	@go build -o bin/fleetctrl-client.exe cmd/main/main.go
 
 
+test:
+	@echo "Running tests..."
+	@go test ./...
+
+
+test-v:
+	@echo "Running tests (verbose)..."
+	@go test -v ./...
+
+
+test-cover:
+	@echo "Running tests with coverage..."
+	@go test ./... -coverprofile=coverage.out
+	@go tool cover -func=coverage.out
+
+
+test-apps:
+	@echo "Running app tests..."
+	@go test -v ./internal/apps/...
+
+
 # Run the application
 run:
 	@go run cmd/main/main.go
