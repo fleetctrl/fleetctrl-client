@@ -280,6 +280,12 @@ func (ms *MainService) StartApplicationsManagement() {
 		}
 		appsResponse.Body.Close()
 
+		if len(assignedAppsResponse.Apps) == 0 {
+			utils.Info("No assigned apps found")
+			time.Sleep(15 * time.Minute)
+			continue
+		}
+
 		for _, app := range assignedAppsResponse.Apps {
 			utils.Info("Processing app: ", app.DisplayName)
 			if len(app.Releases) == 0 {
