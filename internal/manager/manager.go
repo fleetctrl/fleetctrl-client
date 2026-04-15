@@ -202,7 +202,7 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 			utils.Error("chyba při kontrole registrace zařízení:", err)
 			recoverFailed = true
 		} else if !isEnrolled {
-			utils.Error("zařízení není zaregistrováno na serveru, bude provedena nová registrace", nil)
+			utils.Info("zařízení není zaregistrováno na serveru, bude provedena nová registrace")
 			recoverFailed = true
 		} else {
 			if nt, rerr := as.RecoverTokens(); rerr == nil {
