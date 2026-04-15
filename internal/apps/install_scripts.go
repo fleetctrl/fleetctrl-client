@@ -5,6 +5,7 @@ import (
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,17 @@ import (
 )
 
 const defaultInstallScriptTimeout = 300 * time.Second
+
+var (
+	downloadReleaseScriptFunc           = downloadReleaseScript
+	executePowerShellScriptAsSystemFunc = executePowerShellScriptAsSystem
+	executePowerShellScriptAsUserFunc   = executePowerShellScriptAsUser
+	tempDirFunc                         = os.TempDir
+	newUUIDFunc                         = func() string { return uuid.New().String() }
+	httpGetFunc                         = func(url string, headers map[string]string) (*http.Response, error) { return utils.Get(url, headers) }
+	copyFunc                            = utils.Copy
+	calculateFileHashFunc               = utils.CalculateFileHash
+)
 
 type scriptExecutionResult struct {
 	Output   []byte
@@ -33,7 +45,7 @@ func runInstallScriptForPhase(release models.AssignedRelease, serverURL, phase s
 		return fmt.Errorf("%s-install script %s has unsupported engine %q", phase, script.ID, script.Engine)
 	}
 
-	scriptPath, workDir, cleanup, err := downloadReleaseScript(*script, serverURL)
+	scriptPath, workDir, cleanup, err := downloadReleaseScriptFunc(*script, serverURL)
 	if err != nil {
 		return fmt.Errorf("failed to download %s-install script: %v", phase, err)
 	}
@@ -50,10 +62,10 @@ func runInstallScriptForPhase(release models.AssignedRelease, serverURL, phase s
 	var result scriptExecutionResult
 	if script.RunAsSystem {
 		utils.Infof("Running %s-install script %s as SYSTEM", phase, script.ScriptName)
-		result, err = executePowerShellScriptAsSystem(ctx, scriptPath, workDir)
+		result, err = executePowerShellScriptAsSystemFunc(ctx, scriptPath, workDir)
 	} else {
 		utils.Infof("Running %s-install script %s as current user", phase, script.ScriptName)
-		result, err = executePowerShellScriptAsUser(ctx, scriptPath, workDir)
+		result, err = executePowerShellScriptAsUserFunc(ctx, scriptPath, workDir)
 	}
 
 	output := strings.TrimSpace(string(result.Output))
@@ -86,17 +98,17 @@ func findReleaseScriptByPhase(scripts []models.ReleaseScript, phase string) *mod
 }
 
 func downloadReleaseScript(script models.ReleaseScript, serverURL string) (string, string, func(), error) {
-	tempDir := os.TempDir()
+	tempDir := tempDirFunc()
 	ext := strings.ToLower(filepath.Ext(script.ScriptName))
 	if ext == "" {
 		ext = ".ps1"
 	}
 
-	localPath := filepath.Join(tempDir, fmt.Sprintf("%s_%s%s", script.ID, uuid.New().String(), ext))
+	localPath := filepath.Join(tempDir, fmt.Sprintf("%s_%s%s", script.ID, newUUIDFunc(), ext))
 	downloadURL := fmt.Sprintf("%s/apps/script/download/%s", serverURL, script.ID)
 	utils.Infof("Downloading install script from: %s", downloadURL)
 
-	resp, err := utils.Get(downloadURL, map[string]string{})
+	resp, err := httpGetFunc(downloadURL, map[string]string{})
 	if err != nil {
 		return "", "", nil, fmt.Errorf("download request failed: %v", err)
 	}
@@ -111,7 +123,7 @@ func downloadReleaseScript(script models.ReleaseScript, serverURL string) (strin
 		return "", "", nil, fmt.Errorf("failed to create local script file: %v", err)
 	}
 
-	if _, err = utils.Copy(file, resp.Body); err != nil {
+	if _, err = copyFunc(file, resp.Body); err != nil {
 		file.Close()
 		os.Remove(localPath)
 		return "", "", nil, fmt.Errorf("failed to save script: %v", err)
@@ -131,7 +143,7 @@ func downloadReleaseScript(script models.ReleaseScript, serverURL string) (strin
 	}
 
 	if script.Hash != "" {
-		fileHash, err := utils.CalculateFileHash(localPath)
+		fileHash, err := calculateFileHashFunc(localPath)
 		if err != nil {
 			os.Remove(localPath)
 			return "", "", nil, fmt.Errorf("failed to calculate hash: %v", err)

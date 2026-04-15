@@ -44,8 +44,8 @@ func GetComputerOSVersion() (string, error) {
 }
 
 func GetComputerIP() (string, error) {
-	// get computer name
-	cmd := exec.Command("powershell", "-Command", "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*.*' }).IPAddress | Select-Object -First 1")
+	// get private IPv4 address (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+	cmd := exec.Command("powershell", "-Command", "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' -or $_.IPAddress -like '10.*' -or $_.IPAddress -match '^172\\.(1[6-9]|2[0-9]|3[01])\\.' }).IPAddress | Select-Object -First 1")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err

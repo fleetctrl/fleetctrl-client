@@ -29,9 +29,6 @@ type AuthTransport struct {
 
 	mu sync.Mutex
 
-	// local_time - server_time; used to adjust DPoP iat
-	serverSkew time.Duration
-
 	// Backoff and concurrency control for refresh/recover
 	refreshMu       sync.Mutex
 	lastAttempt     time.Time
@@ -257,14 +254,7 @@ func (t *AuthTransport) waitForServerOnline(ctx context.Context) error {
 		if resp, err := client.Do(req); err == nil {
 			if resp.StatusCode == http.StatusOK {
 				// capture server time skew if Date header is present
-				if date := resp.Header.Get("Date"); date != "" {
-					if srvTime, perr := http.ParseTime(date); perr == nil {
-						skew := time.Since(srvTime)
-						t.mu.Lock()
-						t.serverSkew = skew
-						t.mu.Unlock()
-					}
-				}
+				t.AS.updateServerSkewFromDateHeader(resp.Header.Get("Date"))
 				drainAndClose(resp.Body)
 				return nil
 			}
@@ -329,9 +319,8 @@ func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Use server skew to avoid stale proofs
-	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
-	iat := time.Now().Add(-skew)
+	// Use shared skew tracking to avoid stale proofs.
+	iat := t.AS.currentDPoPIssuedAt()
 	if dpop, derr := CreateDPoPAt(http.MethodPost, recoverURL, "", iat); derr == nil {
 		req.Header.Set("DPoP", dpop)
 	}
@@ -381,9 +370,8 @@ func (t *AuthTransport) setAuthHeaders(req *http.Request, accessToken string) {
 	req.Header.Set("X-Client-Platform", platform)
 
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	// Adjust iat by observed server skew
-	skew := func() time.Duration { t.mu.Lock(); defer t.mu.Unlock(); return t.serverSkew }()
-	iat := time.Now().Add(-skew)
+	// Adjust iat by observed server skew shared with direct auth flows.
+	iat := t.AS.currentDPoPIssuedAt()
 	if dpop, err := CreateDPoPAt(req.Method, req.URL.String(), accessToken, iat); err == nil {
 		req.Header.Set("DPoP", dpop)
 	} else {

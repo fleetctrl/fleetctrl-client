@@ -13,11 +13,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"golang.org/x/sys/windows"
 	winreg "golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 )
@@ -25,8 +28,6 @@ import (
 type serviceHandler struct{}
 
 func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop}
-
 	// Mark service as running and accept Stop/Shutdown
 	changes <- svc.Status{
 		State:   svc.Running,
@@ -49,6 +50,13 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 	as := auth.NewAuthService(serverURL)
 	ms := service.NewMainService(as, serverURL)
+	deviceID, hasDeviceID, err := auth.LoadDeviceID()
+	if err != nil {
+		log.Fatalln("error getting device ID from registry: ", err)
+	}
+	if !hasDeviceID {
+		log.Fatalln("DeviceID is missing. Re-enroll or reinstall the client.")
+	}
 
 	var registered bool
 	delay := 5 * time.Second
@@ -64,7 +72,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 			utils.Info("Ping failed: server unhealthy")
 		} else {
 			// Connection is good, check enrollment
-			registered, err = as.IsEnrolled()
+			registered, err = as.IsEnrolled(deviceID)
 			if err == nil {
 				// Success
 				break
@@ -218,6 +226,59 @@ func (w logWriter) Write(p []byte) (n int, err error) {
 	return f.Write(p)
 }
 
+func logInstallerExecutionContext(commandName string, serverURL string, isMSI bool) {
+	exePath, exeErr := os.Executable()
+	if exeErr != nil {
+		exePath = fmt.Sprintf("<error: %v>", exeErr)
+	}
+
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		cwd = fmt.Sprintf("<error: %v>", cwdErr)
+	}
+
+	username := "<unknown>"
+	userSID := "<unknown>"
+	if currentUser, err := user.Current(); err == nil {
+		if strings.TrimSpace(currentUser.Username) != "" {
+			username = currentUser.Username
+		}
+		if strings.TrimSpace(currentUser.Uid) != "" {
+			userSID = currentUser.Uid
+		}
+	} else {
+		username = fmt.Sprintf("<error: %v>", err)
+		userSID = fmt.Sprintf("<error: %v>", err)
+	}
+
+	elevated := false
+	if token := windows.GetCurrentProcessToken(); token != 0 {
+		elevated = token.IsElevated()
+	}
+
+	proxyInfo := "<not checked>"
+	trimmedServerURL := strings.TrimSpace(serverURL)
+	if trimmedServerURL != "" {
+		probeURL := strings.TrimRight(trimmedServerURL, "/") + "/health"
+		if req, err := http.NewRequest(http.MethodGet, probeURL, nil); err == nil {
+			if proxyURL, err := http.ProxyFromEnvironment(req); err != nil {
+				proxyInfo = fmt.Sprintf("proxy lookup error: %v", err)
+			} else if proxyURL != nil {
+				proxyInfo = proxyURL.String()
+			} else {
+				proxyInfo = "DIRECT"
+			}
+		} else {
+			proxyInfo = fmt.Sprintf("request build error: %v", err)
+		}
+	}
+
+	log.Printf("Installer context: command=%s isMSI=%v exe=%s cwd=%s", commandName, isMSI, exePath, cwd)
+	log.Printf("Installer context: user=%s sid=%s elevated=%v temp=%s", username, userSID, elevated, os.TempDir())
+	log.Printf("Installer context: USERNAME=%q USERDOMAIN=%q TEMP=%q TMP=%q SYSTEMROOT=%q", os.Getenv("USERNAME"), os.Getenv("USERDOMAIN"), os.Getenv("TEMP"), os.Getenv("TMP"), os.Getenv("SystemRoot"))
+	log.Printf("Installer context: serverURL=%q proxy=%s", trimmedServerURL, proxyInfo)
+}
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -239,19 +300,22 @@ func main() {
 				os.Exit(1)
 			}
 
+			logInstallerExecutionContext("install", *serverURL, *isMSI)
+
 			if *enrollToken == "" || *serverURL == "" {
 				log.Fatalf("missing --token or --url. See log: %s", logPath)
 			}
 
 			err = manager.InstallService(*enrollToken, *serverURL, *isMSI)
 			if err != nil {
-				log.Fatalf("install failed. See log: %s. Error: %v", logPath, err)
+				log.Fatalf("install failed. Error: %v", err)
 			}
 			log.Printf("Install command completed successfully. Log: %s", logPath)
 			return
 		case "remove":
 			removeCmd := flag.NewFlagSet("remove", flag.ExitOnError)
 			installerLog := removeCmd.String("installer-log", "", "Installer log file path")
+			deleteDeviceID := removeCmd.Bool("delete-device-id", false, "Delete the persisted DeviceID from registry")
 
 			err := removeCmd.Parse(os.Args[2:])
 			if err != nil {
@@ -264,7 +328,9 @@ func main() {
 				os.Exit(1)
 			}
 
-			err = manager.RemoveService()
+			logInstallerExecutionContext("remove", "", false)
+
+			err = manager.RemoveService(!*deleteDeviceID)
 			if err != nil {
 				log.Fatalf("remove failed. See log: %s. Error: %v", logPath, err)
 			}
@@ -284,6 +350,8 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Failed to initialize installer logging: %v\n", err)
 				os.Exit(1)
 			}
+
+			logInstallerExecutionContext("update", "", false)
 
 			err = manager.UpdateService()
 			if err != nil {
@@ -311,9 +379,16 @@ func main() {
 
 		as := auth.NewAuthService(serverURL)
 		ms := service.NewMainService(as, serverURL)
+		deviceID, hasDeviceID, err := auth.LoadDeviceID()
+		if err != nil {
+			log.Fatalf("chyba při načítání DeviceID: %v", err)
+		}
+		if !hasDeviceID {
+			log.Fatalln("DeviceID chybí. Proveďte nové enrollnutí nebo reinstall klienta.")
+		}
 
 		// check if computer is registered
-		registered, err := as.IsEnrolled()
+		registered, err := as.IsEnrolled(deviceID)
 		if err != nil {
 			log.Fatalf("chyba při kontrole registrace: %v", err)
 		}
@@ -371,6 +446,7 @@ func main() {
 
 		go ms.StartRustDeskServerSync()
 		go ms.StartRustDeskServerTasks()
+		go ms.StartApplicationsManagement()
 		for {
 			time.Sleep(1 * time.Hour)
 		}

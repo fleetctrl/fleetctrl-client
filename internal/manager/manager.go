@@ -19,15 +19,16 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-func RemoveService() error {
+func RemoveService(preserveDeviceID bool) error {
 	// Nastavení verze na 0
-	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", registry.RegistryValue{Type: registry.RegistryString, Value: "0"})
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", registry.RegistryValue{Type: registry.RegistryString, Value: "0"}); err != nil {
 		log.Printf("Chyba při nastavení verze: %v", err)
 	}
 
-	if key != winreg.Key(0) {
-		key.Close()
+	if !preserveDeviceID {
+		if err := registry.DeleteRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, consts.DeviceIDValueName); err != nil {
+			log.Printf("Chyba při mazání DeviceID z registry: %v", err)
+		}
 	}
 
 	// Check if installed via MSI
@@ -81,11 +82,11 @@ func RemoveService() error {
 	time.Sleep(time.Duration(5) * time.Second)
 
 	for i := 0; i < 3; i++ {
-		err = TakeOwnershipAndDelete(consts.ProgramDataDir)
+		err = cleanupProgramData(preserveDeviceID)
 		if err == nil {
 			break
 		}
-		log.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
+		log.Printf("Pokus %d/3 mazání dat selhal: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 
@@ -136,7 +137,9 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 		// Služba existuje
 		s.Close()
 		// Spuštění odstranění služby
-		RemoveService()
+		if err := RemoveService(true); err != nil {
+			return err
+		}
 	}
 
 	// create folder
@@ -157,35 +160,70 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 
 	// vytvoření registru s verzí klienta
 	var versionKey = registry.RegistryValue{Type: registry.RegistryString, Value: consts.Version}
-	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey); err != nil {
 		return errors.New("chyba při nastavování hodnoty v registru: " + err.Error())
 	}
-	key.Close()
 
 	var serverURLKey = registry.RegistryValue{Type: registry.RegistryString, Value: serverURL}
-	key, err = registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url", serverURLKey)
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url", serverURLKey); err != nil {
 		return errors.New("chyba při nastavování hodnoty server_url v registru: " + err.Error())
 	}
-	key.Close()
 
 	if isMSI {
 		var msiKey = registry.RegistryValue{Type: registry.RegistryDword, Value: float64(1)}
-		key, err = registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi", msiKey)
-		if err != nil {
+		if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi", msiKey); err != nil {
 			return errors.New("chyba při nastavování hodnoty installed_via_msi v registru: " + err.Error())
 		}
-		key.Close()
 	}
 
 	as := auth.NewAuthService(serverURL)
-	tokens, err := as.Enroll(enrollToken)
+	existingDeviceID, _, err := auth.LoadDeviceID()
 	if err != nil {
-		return errors.New("chyba při registraci počítače: " + err.Error())
+		return errors.New("chyba při načítání DeviceID: " + err.Error())
 	}
-	if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-		return errors.New("chyba při ukládání klíče: " + err.Error())
+	privKeyPath := filepath.Join(consts.ProgramDataDir, "certs", "priv.jwk")
+	privKeyInfo, statErr := os.Stat(privKeyPath)
+	privKeyExist := statErr == nil && !privKeyInfo.IsDir()
+
+	// pokus o obnovu připojení
+	recoverFailed := false
+	if existingDeviceID != "" && privKeyExist {
+		isEnrolled, err := as.IsEnrolled(existingDeviceID)
+		if err != nil {
+			utils.Error("chyba při kontrole registrace zařízení:", err)
+			recoverFailed = true
+		} else if !isEnrolled {
+			utils.Info("zařízení není zaregistrováno na serveru, bude provedena nová registrace")
+			recoverFailed = true
+		} else {
+			if nt, rerr := as.RecoverTokens(); rerr == nil {
+				tokens := nt
+				if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+					utils.Error("warning: failed to save refresh token after recover:", err)
+					recoverFailed = true
+				}
+			} else {
+				utils.Error("token recover failed:", rerr)
+				recoverFailed = true
+			}
+		}
+	}
+
+	// Pokud obnova selže nebo zařízení není zaregistrováno, tak zaregistrovat znovu
+	if recoverFailed || existingDeviceID == "" || !privKeyExist {
+		enrollment, err := as.Enroll(enrollToken)
+		if err != nil {
+			return errors.New("chyba při registraci počítače: " + err.Error())
+		}
+		if enrollment.DeviceID == "" {
+			return errors.New("server nevrátil device ID")
+		}
+		if err := auth.SaveDeviceID(enrollment.DeviceID); err != nil {
+			return errors.New("chyba při ukládání DeviceID: " + err.Error())
+		}
+		if err := auth.SaveRefershToken(enrollment.Tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
+			return errors.New("chyba při ukládání klíče: " + err.Error())
+		}
 	}
 
 	// Kopírování souboru
@@ -231,9 +269,12 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 
 func TakeOwnershipAndDelete(path string) error {
 	// zjistit jestli adresář existuje
-	_, err := os.Stat(path)
+	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return nil
+	}
+	if err != nil {
+		return err
 	}
 	// 1. Převzít vlastnictví
 	cmdTakeown := exec.Command("takeown", "/F", path, "/R", "/D", "Y")
@@ -250,10 +291,39 @@ func TakeOwnershipAndDelete(path string) error {
 	}
 
 	// 3. Smazat adresář/soubor
-	cmdRemove := exec.Command("cmd", "/C", "rd", "/S", "/Q", path)
+	removeArgs := []string{"/C", "del", "/F", "/Q", path}
+	if info.IsDir() {
+		removeArgs = []string{"/C", "rd", "/S", "/Q", path}
+	}
+	cmdRemove := exec.Command("cmd", removeArgs...)
 	out, err = cmdRemove.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("remove error: %v, output: %s", err, out)
+	}
+
+	return nil
+}
+
+func cleanupProgramData(preserveDeviceID bool) error {
+	if !preserveDeviceID {
+		return TakeOwnershipAndDelete(consts.ProgramDataDir)
+	}
+
+	entries, err := os.ReadDir(consts.ProgramDataDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == "certs" {
+			continue
+		}
+		if err := TakeOwnershipAndDelete(filepath.Join(consts.ProgramDataDir, entry.Name())); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -310,11 +380,8 @@ func UpdateService() error {
 
 	// Aktualizovat verzi v registru
 	var versionKey = registry.RegistryValue{Type: registry.RegistryString, Value: consts.Version}
-	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey); err != nil {
 		log.Printf("Varování: chyba při aktualizaci verze v registru: %v", err)
-	} else {
-		key.Close()
 	}
 
 	// Spustit službu znovu

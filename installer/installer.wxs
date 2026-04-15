@@ -35,6 +35,7 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
     <Property Id="ENROLL_TOKEN" Secure="yes" />
     <Property Id="SERVER_URL" Secure="yes" />
     <Property Id="INSTALLER_LOG_PATH" Secure="yes" />
+    <Property Id="PRESERVE_DEVICE_DATA" Value="1" Secure="yes" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
 
     <SetProperty Id="INSTALLER_LOG_PATH"
@@ -103,10 +104,16 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       Return="check" />
 
     <!-- REMOVE SERVICE: set CustomActionData -->
+    <SetProperty Id="DELETE_DEVICE_ID_FLAG"
+      Before="RemoveServiceCA"
+      Sequence="execute"
+      Value="--delete-device-id"
+      Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND PRESERVE_DEVICE_DATA&lt;&gt;&quot;1&quot;" />
+
     <SetProperty Id="RemoveServiceCA"
       Before="RemoveServiceCA"
       Sequence="execute"
-      Value="&quot;[INSTALLDIR]client.exe&quot; remove --installer-log &quot;[INSTALLER_LOG_PATH]&quot;" />
+      Value="&quot;[INSTALLDIR]client.exe&quot; remove [DELETE_DEVICE_ID_FLAG] --installer-log &quot;[INSTALLER_LOG_PATH]&quot;" />
 
     <!-- REMOVE SERVICE: deferred+elevated execution -->
     <CustomAction Id="RemoveServiceCA"
@@ -183,6 +190,38 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
         </Control>
       </Dialog>
 
+      <Dialog Id="FleetCtrlUninstallOptionsDlg" Width="370" Height="270"
+        Title="FleetCtrl Client - Uninstall Options">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no"
+          Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="220" Height="15" Transparent="yes"
+          NoPrefix="yes" Text="{\WixUI_Font_Title}Uninstall Options" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="300" Height="15"
+          Transparent="yes" NoPrefix="yes" Text="Choose whether FleetCtrl should preserve the device identity." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="PreserveDeviceData" Type="CheckBox" X="20" Y="78" Width="330" Height="18"
+          Property="PRESERVE_DEVICE_DATA" CheckBoxValue="1"
+          Text="Keep device data (recommended)" />
+        <Control Id="PreserveDescription" Type="Text" X="38" Y="100" Width="300" Height="36"
+          NoPrefix="yes" Text="When enabled, DeviceID stays in HKLM so a later reinstall pairs back to the same device record." />
+        <Control Id="DeleteDescription" Type="Text" X="20" Y="148" Width="320" Height="36"
+          NoPrefix="yes" Text="If you clear the checkbox, uninstall removes DeviceID and the next install creates a new device." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="MaintenanceTypeDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes"
+          Text="&amp;Next">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes"
+          Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
       <!-- Hook into the standard dialog sequence: InstallDirDlg -> FleetCtrlConfigDlg ->
       VerifyReadyDlg -->
 
@@ -192,10 +231,15 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="FleetCtrlConfigDlg"
         Order="6" Condition="NOT WIX_UPGRADE_DETECTED" />
 
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog"
+        Value="FleetCtrlUninstallOptionsDlg" Order="5" Condition="1" />
+
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg"
         Order="5" Condition="WIX_UPGRADE_DETECTED" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="FleetCtrlConfigDlg"
         Order="6" Condition="NOT WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="FleetCtrlUninstallOptionsDlg"
+        Order="7" Condition="REMOVE~=&quot;ALL&quot; AND NOT WIX_UPGRADE_DETECTED" />
     </UI>
 
   </Package>

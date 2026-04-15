@@ -191,13 +191,6 @@ func CompareVersions(v1, v2 string) int {
 	return 0
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // ParseRegistryPath parses a registry path into hive and key path
 func ParseRegistryPath(path string) (registry.Key, string) {
 	path = strings.ReplaceAll(path, "/", "\\")
