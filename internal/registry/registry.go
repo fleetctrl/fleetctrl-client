@@ -33,43 +33,35 @@ func CreateRegistryKey(registryType registry.Key, path string) error {
 	return nil
 }
 
-func SetRegisteryValue(registryType registry.Key, path string, name string, value RegistryValue) (registry.Key, error) {
+func SetRegisteryValue(registryType registry.Key, path string, name string, value RegistryValue) error {
 	var access uint32 = registry.SET_VALUE | registry.QUERY_VALUE
 
 	key, err := registry.OpenKey(registryType, path, access)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create registry key: %w", err)
+		return fmt.Errorf("failed to create registry key: %w", err)
 	}
+	defer key.Close()
 
 	switch value.Type {
 	case RegistryDword:
-		err = key.SetDWordValue(name, uint32(value.Value.(float64)))
-		if err != nil {
-			key.Close()
-			return 0, fmt.Errorf("failed to set registry value: %w", err)
+		if err = key.SetDWordValue(name, uint32(value.Value.(float64))); err != nil {
+			return fmt.Errorf("failed to set registry value: %w", err)
 		}
 	case RegistryQword:
-		err = key.SetQWordValue(name, uint64(value.Value.(float64)))
-		if err != nil {
-			key.Close()
-			return 0, fmt.Errorf("failed to set registry value: %w", err)
+		if err = key.SetQWordValue(name, uint64(value.Value.(float64))); err != nil {
+			return fmt.Errorf("failed to set registry value: %w", err)
 		}
 	case RegistryBinary:
-		err = key.SetBinaryValue(name, value.Value.([]byte))
-		if err != nil {
-			key.Close()
-			return 0, fmt.Errorf("failed to set registry value: %w", err)
+		if err = key.SetBinaryValue(name, value.Value.([]byte)); err != nil {
+			return fmt.Errorf("failed to set registry value: %w", err)
 		}
 	case RegistryString:
-		err = key.SetStringValue(name, value.Value.(string))
-		if err != nil {
-			key.Close()
-			return 0, fmt.Errorf("failed to set registry value: %w", err)
+		if err = key.SetStringValue(name, value.Value.(string)); err != nil {
+			return fmt.Errorf("failed to set registry value: %w", err)
 		}
 	}
 
-	// NOTE: key is NOT closed here — caller is responsible for closing it.
-	return key, nil
+	return nil
 }
 
 func GetRegisteryValue(registryType registry.Key, path string, name string) (string, error) {

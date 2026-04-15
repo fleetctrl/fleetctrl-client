@@ -21,11 +21,8 @@ import (
 
 func RemoveService(preserveDeviceID bool) error {
 	// Nastavení verze na 0
-	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", registry.RegistryValue{Type: registry.RegistryString, Value: "0"})
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", registry.RegistryValue{Type: registry.RegistryString, Value: "0"}); err != nil {
 		log.Printf("Chyba při nastavení verze: %v", err)
-	} else {
-		key.Close()
 	}
 
 	if !preserveDeviceID {
@@ -163,26 +160,20 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 
 	// vytvoření registru s verzí klienta
 	var versionKey = registry.RegistryValue{Type: registry.RegistryString, Value: consts.Version}
-	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey); err != nil {
 		return errors.New("chyba při nastavování hodnoty v registru: " + err.Error())
 	}
-	key.Close()
 
 	var serverURLKey = registry.RegistryValue{Type: registry.RegistryString, Value: serverURL}
-	key, err = registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url", serverURLKey)
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "server_url", serverURLKey); err != nil {
 		return errors.New("chyba při nastavování hodnoty server_url v registru: " + err.Error())
 	}
-	key.Close()
 
 	if isMSI {
 		var msiKey = registry.RegistryValue{Type: registry.RegistryDword, Value: float64(1)}
-		key, err = registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi", msiKey)
-		if err != nil {
+		if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi", msiKey); err != nil {
 			return errors.New("chyba při nastavování hodnoty installed_via_msi v registru: " + err.Error())
 		}
-		key.Close()
 	}
 
 	as := auth.NewAuthService(serverURL)
@@ -389,11 +380,8 @@ func UpdateService() error {
 
 	// Aktualizovat verzi v registru
 	var versionKey = registry.RegistryValue{Type: registry.RegistryString, Value: consts.Version}
-	key, err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey)
-	if err != nil {
+	if err := registry.SetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "version", versionKey); err != nil {
 		log.Printf("Varování: chyba při aktualizaci verze v registru: %v", err)
-	} else {
-		key.Close()
 	}
 
 	// Spustit službu znovu

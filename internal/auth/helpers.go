@@ -110,16 +110,14 @@ func SaveDeviceID(deviceID string) error {
 		return errors.New("device ID is empty")
 	}
 
-	key, err := appregistry.SetRegisteryValue(
+	if err := appregistry.SetRegisteryValue(
 		winreg.LOCAL_MACHINE,
 		consts.RegisteryRootKey,
 		consts.DeviceIDValueName,
 		appregistry.RegistryValue{Type: appregistry.RegistryString, Value: trimmed},
-	)
-	if err != nil {
+	); err != nil {
 		return err
 	}
-	key.Close()
 
 	return nil
 }
