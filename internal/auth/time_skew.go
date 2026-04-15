@@ -9,8 +9,11 @@ import (
 )
 
 var serverTimeProbeClient = &http.Client{
-	Transport: &http.Transport{DisableKeepAlives: true},
-	Timeout:   10 * time.Second,
+	Transport: &http.Transport{
+		Proxy:             http.ProxyFromEnvironment,
+		DisableKeepAlives: true,
+	},
+	Timeout: 10 * time.Second,
 }
 
 type serverTimeState struct {
