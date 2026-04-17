@@ -2,7 +2,8 @@ name: Build and Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -31,14 +32,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Extract version (PowerShell)
+      - name: Extract version from tag
         id: extract_version
         shell: pwsh
         run: |
-          $pattern = '^\s*Version\s*=\s*"([^"]+)"'
-          $match = Select-String -Path "internal\const\consts.go" -Pattern $pattern -Encoding UTF8
-          if (-not $match) { Write-Error "Version not found in internal\const\consts.go"; exit 1 }
-          $version = $match.Matches[0].Groups[1].Value
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build (Windows)
@@ -74,14 +73,13 @@ jobs:
       - name: Create GitHub Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ steps.extract_version.outputs.version }}
-          tag_name: ${{ steps.extract_version.outputs.version }}
-          target_commitish: ${{ github.sha }}
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
           files: |
             ./bin/fleetctrl-client.exe
             ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.exe
             ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.msi
-          draft: false
+          draft: true
           prerelease: false
           generate_release_notes: true
         env:
