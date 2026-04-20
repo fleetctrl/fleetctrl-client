@@ -1,0 +1,20 @@
+[package]
+name = "fleetctrl-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+fleetctrl-core = { path = "../fleetctrl-core" }
+fleetctrl-win = { path = "../fleetctrl-win" }
+reqwest.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"

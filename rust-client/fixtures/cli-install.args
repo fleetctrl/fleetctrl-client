@@ -1,0 +1,1 @@
+install --token abc --url https://fleet.example.com --msi

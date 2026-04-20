@@ -5,6 +5,14 @@ build:
 	
 	@go build -o bin/fleetctrl-client.exe cmd/main/main.go
 
+rust-build:
+	@echo "Building Rust client..."
+	@cargo build --manifest-path rust-client/Cargo.toml --release -p fleetctrl-client
+
+rust-test:
+	@echo "Running Rust tests..."
+	@cargo test --manifest-path rust-client/Cargo.toml --workspace
+
 
 test:
 	@echo "Running tests..."

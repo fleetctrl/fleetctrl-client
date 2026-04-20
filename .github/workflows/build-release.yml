@@ -22,6 +22,9 @@ jobs:
         with:
           go-version: stable
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Cache Go build
         uses: actions/cache@v4
         with:
@@ -32,6 +35,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            rust-client\target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-client\\Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Extract version from tag
         id: extract_version
         shell: pwsh
@@ -40,12 +54,21 @@ jobs:
           $version = $tag -replace '^v', ''
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Build (Windows)
+      - name: Build Go Reference (Windows)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "bin" | Out-Null
-          go build -o ".\bin\fleetctrl-client.exe" ".\cmd\main\"
+          go build -o ".\bin\fleetctrl-client-go.exe" ".\cmd\main\"
           $version = "${{ steps.extract_version.outputs.version }}"
+          Copy-Item ".\bin\fleetctrl-client-go.exe" ".\bin\fleetctrl-client-go-$version.exe" -Force
+
+      - name: Build Rust Client (Windows)
+        shell: pwsh
+        run: |
+          cargo test --manifest-path rust-client/Cargo.toml --workspace
+          cargo build --manifest-path rust-client/Cargo.toml --release -p fleetctrl-client
+          $version = "${{ steps.extract_version.outputs.version }}"
+          Copy-Item ".\rust-client\target\release\fleetctrl-client.exe" ".\bin\fleetctrl-client.exe" -Force
           Copy-Item ".\bin\fleetctrl-client.exe" ".\bin\fleetctrl-client-$version.exe" -Force
 
       - name: Install WiX Toolset v4
@@ -78,6 +101,8 @@ jobs:
           files: |
             ./bin/fleetctrl-client.exe
             ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.exe
+            ./bin/fleetctrl-client-go.exe
+            ./bin/fleetctrl-client-go-${{ steps.extract_version.outputs.version }}.exe
             ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.msi
           draft: true
           prerelease: false
