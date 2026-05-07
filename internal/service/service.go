@@ -30,8 +30,6 @@ func (ms *MainService) StartRustDeskServerSync() {
 		rustdeskID, err := utils.GetRustDeskID()
 		if err != nil {
 			utils.Error(err)
-			time.Sleep(15 * time.Minute)
-			continue
 		}
 		// get PC name
 		computerName, err := utils.GetComputerName()
