@@ -142,18 +142,16 @@ func downloadReleaseScript(script models.ReleaseScript, serverURL string) (strin
 		}
 	}
 
-	if script.Hash != "" {
-		fileHash, err := calculateFileHashFunc(localPath)
-		if err != nil {
-			os.Remove(localPath)
-			return "", "", nil, fmt.Errorf("failed to calculate hash: %v", err)
-		}
-		if !strings.EqualFold(fileHash, script.Hash) {
-			os.Remove(localPath)
-			return "", "", nil, fmt.Errorf("hash mismatch: expected %s, got %s", script.Hash, fileHash)
-		}
-		utils.Infof("Install script %s hash verified successfully", script.ScriptName)
+	fileHash, err := calculateFileHashFunc(localPath)
+	if err != nil {
+		os.Remove(localPath)
+		return "", "", nil, fmt.Errorf("failed to calculate hash: %v", err)
 	}
+	if !strings.EqualFold(fileHash, script.Hash) {
+		os.Remove(localPath)
+		return "", "", nil, fmt.Errorf("hash mismatch: expected %s, got %s", script.Hash, fileHash)
+	}
+	utils.Infof("Install script %s hash verified successfully", script.ScriptName)
 
 	cleanup := func() {
 		os.Remove(localPath)
