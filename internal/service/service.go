@@ -106,6 +106,8 @@ func (ms *MainService) StartRustDeskServerSync() {
 }
 
 func (ms *MainService) StartRustDeskServerTasks() {
+	const sleepTime = 5 * time.Minute
+
 	utils.Info("Starting tasks...")
 	for {
 		// get tasks
@@ -114,13 +116,13 @@ func (ms *MainService) StartRustDeskServerTasks() {
 		})
 		if err != nil {
 			utils.Error(err)
-			time.Sleep(5 * time.Minute)
+			time.Sleep(sleepTime)
 			continue
 		}
 		if tasksRes.StatusCode != 200 {
 			// parse body
 			utils.Error("Server returned error: ", utils.ParseHttpError(tasksRes))
-			time.Sleep(5 * time.Minute)
+			time.Sleep(sleepTime)
 			continue
 		}
 
@@ -128,11 +130,17 @@ func (ms *MainService) StartRustDeskServerTasks() {
 		if err := json.NewDecoder(tasksRes.Body).Decode(&data); err != nil {
 			tasksRes.Body.Close()
 			utils.Error(err)
-			time.Sleep(5 * time.Minute)
+			time.Sleep(sleepTime)
 			continue
 		}
 		tasksRes.Body.Close()
 		tasksList := data.Tasks
+
+		if len(tasksList) == 0 {
+			utils.Info("No pending tasks found")
+			time.Sleep(sleepTime)
+			continue
+		}
 
 		for i := range tasksList {
 			task := tasksList[i]
@@ -149,7 +157,7 @@ func (ms *MainService) StartRustDeskServerTasks() {
 				}
 				var d models.SetPasswordTask
 				if err := json.Unmarshal(task.TaskData, &d); err != nil {
-					log.Println(err)
+					utils.Error(err)
 					continue
 				}
 
@@ -159,7 +167,7 @@ func (ms *MainService) StartRustDeskServerTasks() {
 				cmd.Stderr = log.Writer()
 				err := cmd.Run()
 				if err != nil {
-					log.Println(err)
+					utils.Error(err)
 					if patchRes, patchErr := utils.Patch(ms.serverURL+"/task/"+task.ID, map[string]string{
 						"status": "ERROR",
 						"error":  err.Error(),
@@ -228,7 +236,7 @@ func (ms *MainService) StartRustDeskServerTasks() {
 			}
 		}
 
-		time.Sleep(5 * time.Minute)
+		time.Sleep(sleepTime)
 	}
 }
 

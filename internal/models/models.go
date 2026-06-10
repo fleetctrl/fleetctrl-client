@@ -2,7 +2,6 @@ package models
 
 import (
 	"encoding/json"
-	"time"
 )
 
 type Task struct {
@@ -10,7 +9,7 @@ type Task struct {
 	Status    string          `json:"status"`
 	Task      string          `json:"task"`
 	TaskData  json.RawMessage `json:"task_data"`
-	CreatedAt time.Time       `json:"created_at"`
+	CreatedAt float64         `json:"created_at"`
 }
 
 type SetPasswordTask struct {
