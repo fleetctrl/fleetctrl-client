@@ -3,7 +3,7 @@ package consts
 import "time"
 
 const (
-	Version            = "2.0.1"
+	Version            = "2.0.2"
 	Production         = true
 	ServiceName        = "fleetctrl-client"
 	ServiceDisplayName = "fleetctrl client"
