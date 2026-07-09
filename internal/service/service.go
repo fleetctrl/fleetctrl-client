@@ -298,7 +298,7 @@ func (ms *MainService) StartApplicationsManagement() {
 				utils.Errorf("App %s has no releases, skipping", app.DisplayName)
 				continue
 			}
-			newestRelease := app.Releases[len(app.Releases)-1]
+			newestRelease := selectNewestRelease(app.Releases)
 			if newestRelease.AssignType == "exclude" {
 				continue
 			}
