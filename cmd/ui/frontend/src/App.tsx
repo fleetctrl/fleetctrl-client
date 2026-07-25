@@ -16,6 +16,20 @@ const formatTime = (value?: string) => value
   ? new Intl.DateTimeFormat('cs-CZ', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
   : 'Zatím neproběhlo'
 
+const relTime = (value?: string) => {
+  if (!value) return 'Zatím neproběhla'
+  const diff = Date.now() - new Date(value).getTime()
+  if (diff < 45_000) return 'právě teď'
+  const rtf = new Intl.RelativeTimeFormat('cs', { numeric: 'auto' })
+  const minutes = Math.round(diff / 60_000)
+  if (minutes < 60) return rtf.format(-minutes, 'minute')
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return rtf.format(-hours, 'hour')
+  return rtf.format(-Math.round(hours / 24), 'day')
+}
+
+const host = (url?: string) => url ? url.replace(/^https?:\/\//, '').replace(/\/+$/, '') : ''
+
 function Icon({ name }: { name: 'grid' | 'apps' | 'sync' | 'check' | 'warning' | 'server' | 'clock' | 'close' }) {
   const paths = {
     grid: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
@@ -97,7 +111,10 @@ export default function App() {
       </nav>
       <div className="aside-status">
         <span className={`dot ${overview ? 'online' : ''}`}/>
-        <div><strong>{overview ? 'Služba je dostupná' : 'Služba je nedostupná'}</strong><span>{overview ? `Verze ${overview.service_version}` : 'Čekám na připojení'}</span></div>
+        <div>
+          <strong>{overview ? 'Služba je dostupná' : 'Služba je nedostupná'}</strong>
+          <span className="aside-meta">{overview ? `${overview.service_version} · ${host(overview.server_url)}` : 'čekám na připojení'}</span>
+        </div>
       </div>
     </aside>
 
@@ -121,21 +138,17 @@ function OverviewPage({ overview, apps }: { overview?: Overview, apps: ManagedAp
   const problems = apps.filter(app => app.operation_status === 'error' || app.last_error).length
   const missing = apps.filter(app => app.detected_status === 'not_installed').length
   return <div className="content desktop-overview">
-    <section className="native-group service-group">
-      <div className="group-heading">
-        <div className={`service-symbol ${overview ? 'connected' : ''}`}><Icon name="server"/></div>
-        <div><h2>Služba FleetCtrl</h2><p>Lokální služba pro správu zařízení</p></div>
-        <span className={`connection-state ${overview ? 'connected' : ''}`}><span/>{overview ? 'Připojeno' : 'Nedostupné'}</span>
-      </div>
-      <dl className="property-list">
-        <div><dt>Server</dt><dd>{overview?.server_url || '—'}</dd></div>
-        <div><dt>Poslední pokus</dt><dd>{formatTime(overview?.last_attempt?.started_at ?? overview?.last_attempt?.created_at)}{overview?.last_attempt && <small>{statusText[overview.last_attempt.status]}</small>}</dd></div>
-        <div><dt>Poslední úspěch</dt><dd>{formatTime(overview?.last_success?.completed_at)}</dd></div>
-        <div><dt>Verze služby</dt><dd>{overview?.service_version || '—'}</dd></div>
-      </dl>
+    <section className="hero">
+      <p className="hero-eyebrow">{overview ? 'Poslední úspěšná synchronizace' : 'Stav služby FleetCtrl'}</p>
+      <p className="hero-time">{overview ? relTime(overview.last_success?.completed_at) : 'Nedostupná'}</p>
+      <p className="hero-status">
+        <span className={`pulse-dot${overview ? '' : ' down'}`}/>
+        {overview ? 'Služba je připojená' : 'Služba neodpovídá'}
+        {overview && <span className="hero-meta">{host(overview.server_url)} · v{overview.service_version}</span>}
+      </p>
     </section>
 
-    <section className="native-group apps-summary">
+    <section className="native-group">
       <div className="section-label"><h3>Aplikace</h3><span>{apps.length} spravovaných</span></div>
       <div className="summary-line">
         <div><strong>{installed}</strong><span>Nainstalováno</span></div>
@@ -144,11 +157,15 @@ function OverviewPage({ overview, apps }: { overview?: Overview, apps: ManagedAp
       </div>
     </section>
 
-    <section className="native-group activity-group">
-      <div className="section-label"><h3>Synchronizace</h3><span>Aktuální aktivita</span></div>
+    <section className="native-group">
+      <div className="section-label"><h3>Synchronizace</h3>{overview?.current_run && <span>{statusText[overview.current_run.status]}</span>}</div>
       {overview?.current_run
-        ? <div className="run-row"><span className="spinner"/><div><strong>{statusText[overview.current_run.kind] ?? 'Synchronizace dat'}</strong><span>Spuštěno {formatTime(overview.current_run.started_at)}</span></div><span className="pill pending">{statusText[overview.current_run.status]}</span></div>
+        ? <div className="run-row"><span className="spinner"/><div><strong>{statusText[overview.current_run.kind] ?? 'Synchronizace dat'}</strong><span>Spuštěno {formatTime(overview.current_run.started_at)}</span></div></div>
         : <div className="idle-row"><span className="status-check"><Icon name="check"/></span><div><strong>Klient je v klidu</strong><span>Automatická kontrola poběží podle plánu služby.</span></div></div>}
+      <dl className="property-list">
+        <div><dt>Poslední pokus</dt><dd>{formatTime(overview?.last_attempt?.started_at ?? overview?.last_attempt?.created_at)}{overview?.last_attempt && <small>{statusText[overview.last_attempt.status]}</small>}</dd></div>
+        <div><dt>Poslední úspěch</dt><dd>{formatTime(overview?.last_success?.completed_at)}</dd></div>
+      </dl>
       {overview?.last_error?.error_message && <div className="last-error"><Icon name="warning"/><div><strong>Poslední problém</strong><span>{overview.last_error.error_message}</span></div><code>{overview.last_error.id.slice(0, 8)}</code></div>}
     </section>
   </div>
@@ -175,7 +192,7 @@ function ApplicationsPage({ apps, filter, setFilter, onSelect }: { apps: Managed
 function AppDetail({ app, events, close }: { app: ManagedApp, events: AppEvent[], close: () => void }) {
   return <div className="drawer-backdrop" onMouseDown={close}><aside aria-label={`Detail aplikace ${app.display_name}`} aria-modal="true" role="dialog" className="drawer" onMouseDown={e => e.stopPropagation()}>
     <button aria-label="Zavřít detail aplikace" className="drawer-close" onClick={close}><Icon name="close"/></button>
-    <div className="drawer-app"><span className="app-avatar large">{app.display_name.slice(0, 1)}</span><div><span className="eyebrow">DETAIL APLIKACE</span><h2>{app.display_name}</h2><p>{app.publisher || app.installer_type} · {app.version}</p></div></div>
+    <div className="drawer-app"><span className="app-avatar large">{app.display_name.slice(0, 1)}</span><div><span className="eyebrow">Detail aplikace</span><h2>{app.display_name}</h2><p>{app.publisher || app.installer_type} · {app.version}</p></div></div>
     <div className="detail-grid"><div><span>Požadovaný stav</span><strong>{app.desired_action === 'install' ? 'Nainstalovat' : 'Odinstalovat'}</strong></div><div><span>Nalezeno v systému</span><strong>{statusText[app.detected_status]}</strong></div><div><span>Naposledy ověřeno</span><strong>{formatTime(app.last_checked_at)}</strong></div><div><span>Instalováno klientem</span><strong>{formatTime(app.installed_by_client_at)}</strong></div></div>
     {app.last_error && <div className="detail-error"><Icon name="warning"/>{app.last_error}</div>}
     <div className="history"><h3>Poslední události</h3>{events.length === 0 ? <p className="muted">Zatím bez zaznamenaných událostí.</p> : events.map(event => <div className="event" key={event.id}><span/><div><strong>{eventLabel(event.event_type)}</strong><small>{formatTime(event.created_at)} · {event.source}</small>{event.message && <p>{event.message}</p>}</div></div>)}</div>
