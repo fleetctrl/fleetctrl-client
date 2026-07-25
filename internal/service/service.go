@@ -23,7 +23,7 @@ func NewMainService(as *auth.AuthService, serverURL string) *MainService {
 	return &MainService{as: as, serverURL: serverURL}
 }
 
-func (ms *MainService) StartRustDeskServerSync() {
+func (ms *MainService) legacyStartRustDeskServerSync() {
 	utils.Info("Starting RustDesk sync...")
 	for {
 		// get rustdesk ID
@@ -256,7 +256,7 @@ func (ms *MainService) reportReleaseInstallState(releaseID string, status apps.R
 	}
 }
 
-func (ms *MainService) StartApplicationsManagement() {
+func (ms *MainService) legacyStartApplicationsManagement() {
 	utils.Info("Starting applications management...")
 
 	for {

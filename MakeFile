@@ -1,9 +1,13 @@
 # Simple Makefile for a Go project
 build:
 	@echo "Building..."
-	
-	
-	@go build -o bin/fleetctrl-client.exe cmd/main/main.go
+	@go build -o bin/fleetctrl-client.exe ./cmd/main
+	@cd cmd/ui && go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build -clean -platform windows/amd64 -webview2 download -o fleetctrl-ui.exe
+	@cp cmd/ui/build/bin/fleetctrl-ui.exe bin/fleetctrl-ui.exe
+
+build-ui:
+	@cd cmd/ui && go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build -clean -platform windows/amd64 -webview2 download -o fleetctrl-ui.exe
+	@cp cmd/ui/build/bin/fleetctrl-ui.exe bin/fleetctrl-ui.exe
 
 
 test:

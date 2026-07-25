@@ -64,11 +64,38 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
             Name="client.exe"
             KeyPath="yes" />
         </Component>
+        <Component Id="UIExeComp" Guid="d4adf86e-bf48-4607-aa0e-a0fe18d7e78d" Bitness="always64">
+          <File Id="UIExe"
+            Source="$(sys.SOURCEFILEDIR)..\bin\fleetctrl-ui.exe"
+            Name="fleetctrl-ui.exe"
+            KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="FleetCtrlProgramMenuFolder" Name="FleetCtrl">
+        <Component Id="StartMenuShortcutComp" Guid="f7502cb9-324e-4203-bcef-98827945e58c" Bitness="always64">
+          <Shortcut Id="FleetCtrlUIShortcut"
+            Name="FleetCtrl"
+            Description="Stav služby a spravovaných aplikací FleetCtrl"
+            Target="[INSTALLDIR]fleetctrl-ui.exe"
+            WorkingDirectory="INSTALLDIR" />
+          <RemoveFolder Id="RemoveFleetCtrlProgramMenuFolder" On="uninstall" />
+          <RegistryValue Root="HKLM"
+            Key="SOFTWARE\fleetctrl\client"
+            Name="ui_shortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
 
     <Feature Id="MainFeature" Title="FleetCtrl Client" Level="1">
       <ComponentRef Id="ClientExeComp" />
+      <ComponentRef Id="UIExeComp" />
+      <ComponentRef Id="StartMenuShortcutComp" />
     </Feature>
 
     <!-- ══════════════════════════════════════════════════════════

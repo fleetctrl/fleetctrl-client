@@ -5,18 +5,23 @@ Lightweight Windows client that runs as a service and synchronizes computer info
 ## Prerequisites
 
 - Windows 10/11
-- Go 1.24+ (only if building from source)
+- Go 1.25+ (only if building from source)
+- Node.js 20+ (only if building the UI from source)
+- Microsoft Edge WebView2 Runtime (included with supported Windows 10/11 installations)
 - Run PowerShell or CMD as Administrator for install/uninstall
 
 ## Build
 
 ### Windows (Executable)
 
-Build the executable into the `bin` folder:
+Build both the service and local monitoring UI into the `bin` folder:
 
 ```
-go build -o .\bin\fleetctrl-client.exe .\cmd\main\
+make build
 ```
+
+The command builds `fleetctrl-client.exe` and `fleetctrl-ui.exe`. To build
+only the Wails UI, run `make build-ui`.
 
 ### Windows (MSI Installer)
 
@@ -26,7 +31,7 @@ Requires [WiX Toolset v4](https://wixtoolset.org/) installed globally via `dotne
    ```
    wix extension add -g WixToolset.UI.wixext
    ```
-2. Build the `.exe` first as shown above.
+2. Build both `.exe` files first as shown above.
 3. Build the `.msi` file:
    ```
    wix build installer/installer.wxs -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d Version=<VERSION> -arch x64 -o bin/fleetctrl-client.msi
@@ -70,7 +75,23 @@ To install silently from the command line, use public properties `ENROLL_TOKEN` 
 msiexec /i .\bin\fleetctrl-client.msi /qn ENROLL_TOKEN="<ENROLLMENT_TOKEN>" SERVER_URL="https://your-server.example.com"
 ```
 
-The MSI will automatically copy the executable, install the Windows Service, and save the settings.
+The MSI copies both executables, installs the Windows Service, adds a
+**FleetCtrl** Start Menu shortcut for the non-elevated UI, and saves the
+settings. The UI talks only to the local service over a secured named pipe; it
+does not read credentials or call the FleetCtrl server directly.
+
+## Local monitoring UI
+
+Open **FleetCtrl** from the Start Menu. The Czech-language UI shows service
+availability, recent synchronization results, and the detected state of
+applications assigned to the device. **Synchronizovat nyní** refreshes device
+information and application detection state; it does not start installations
+or removals. Automatic reconciliation continues on the service schedule.
+
+The UI polls once per second while synchronization is active and backs off
+when the service is unavailable. Application detail shows the latest 20 local
+events and distinguishes software merely detected on the computer from
+software installed by FleetCtrl.
 
 ## Uninstall the Service
 
