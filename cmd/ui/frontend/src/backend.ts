@@ -3,7 +3,7 @@ import type { AppEvent, ManagedApp, Overview, SyncRun } from './types'
 function backend() {
   const api = window.go?.main?.UIBackend
   if (!api && import.meta.env.DEV) return demoBackend
-  if (!api) throw new Error('Služba UI není připravena.')
+  if (!api) throw new Error('The UI service is not ready.')
   return api
 }
 
