@@ -31,7 +31,7 @@ func main() {
 			WebviewIsTransparent: true,
 			WindowIsTranslucent:  true,
 			DisableWindowIcon:    false,
-			Theme:                windows.Light,
+			Theme:                windows.SystemDefault,
 			BackdropType:         windows.Acrylic,
 			Messages: &windows.Messages{
 				InstallationRequired: "Pro spuštění FleetCtrl je potřeba WebView2 Runtime. Po potvrzení se stáhne a nainstaluje.",
