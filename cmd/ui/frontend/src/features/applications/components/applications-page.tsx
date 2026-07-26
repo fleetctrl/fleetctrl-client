@@ -34,8 +34,8 @@ export function ApplicationsPage({ applications }: { applications: ManagedApp[] 
 
   return (
     <>
-      <div className="mx-auto w-full max-w-[62rem] px-7 pt-6 pb-10 max-[760px]:px-3 max-[760px]:pt-4 max-[760px]:pb-6">
-        <div className="mb-3.5 flex items-center justify-between gap-6 max-[760px]:flex-col max-[760px]:items-stretch max-[760px]:gap-3.5">
+      <div className="mx-auto w-full max-w-[62rem] px-7 pt-6 pb-10 motion-safe:animate-page-enter max-[760px]:px-3 max-[760px]:pt-4 max-[760px]:pb-6">
+        <div className="mb-3.5 flex items-center justify-between gap-6 motion-safe:animate-panel-enter max-[760px]:flex-col max-[760px]:items-stretch max-[760px]:gap-3.5">
           <p className="m-0 max-w-96 text-[0.72rem] text-muted-foreground">The requested state is compared with what the client found on this device.</p>
           <Tabs
             value={filter}

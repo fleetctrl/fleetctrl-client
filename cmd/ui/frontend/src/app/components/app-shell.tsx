@@ -27,7 +27,7 @@ export function AppShell({
 }: AppShellProps) {
   const navigationClass = (active: boolean) => cn(
     'relative h-[2.45rem] w-full justify-start gap-[0.7rem] rounded-[0.45rem] border-0 px-[0.72rem] text-[0.78rem] font-normal text-sidebar-foreground',
-    'hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground',
+    'transition-[background-color,color,transform] duration-150 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground active:scale-[0.985]',
     '[&_.icon]:size-[0.95rem]',
     active && [
       'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm',
@@ -88,7 +88,7 @@ export function AppShell({
             disabled={syncing || !canSync}
             onClick={onSync}
           >
-            <Icon name="sync" />
+            <Icon name="sync" className={cn(syncing && 'animate-spin')} />
             {syncing ? 'Syncing…' : 'Sync now'}
           </Button>
         </header>

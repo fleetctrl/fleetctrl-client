@@ -17,14 +17,14 @@ export function OverviewPage({ overview, applications }: OverviewPageProps) {
   const installed = applications.filter(app => app.detected_status === 'installed').length
   const problems = applications.filter(app => app.operation_status === 'error' || app.last_error).length
   const missing = applications.filter(app => app.detected_status === 'not_installed').length
-  const panel = 'overflow-hidden rounded-[0.55rem] border border-border/90 bg-card shadow-sm backdrop-blur-lg'
+  const panel = 'overflow-hidden rounded-[0.55rem] border border-border/90 bg-card shadow-sm backdrop-blur-lg motion-safe:animate-panel-enter'
   const sectionHeader = 'flex min-h-[3.65rem] items-center justify-between gap-4 border-b border-border px-[1.1rem] py-3'
-  const summaryItem = 'flex min-w-0 items-center gap-3 border-r border-border px-[1.1rem] py-3.5 last:border-r-0'
+  const summaryItem = 'flex min-w-0 items-center gap-3 border-r border-border px-[1.1rem] py-3.5 transition-colors duration-150 last:border-r-0 hover:bg-muted/30'
   const summaryIcon = 'grid size-8 shrink-0 place-items-center rounded-[0.42rem] bg-emerald-500/10 text-emerald-600 [&_svg]:size-4'
   const propertyRow = 'grid min-h-10 grid-cols-[11rem_1fr] items-center border-b border-border py-2 last:border-b-0 max-[760px]:grid-cols-1 max-[760px]:gap-1'
 
   return (
-    <div className="mx-auto grid w-full max-w-[62rem] gap-4 px-7 pt-6 pb-10 max-[760px]:px-3 max-[760px]:pt-4 max-[760px]:pb-6">
+    <div className="mx-auto grid w-full max-w-[62rem] gap-4 px-7 pt-6 pb-10 motion-safe:animate-page-enter max-[760px]:px-3 max-[760px]:pt-4 max-[760px]:pb-6">
       <section className={cn(panel, 'relative grid min-h-[9.8rem] grid-cols-[minmax(0,1fr)_13.5rem] items-center gap-5 border-l-[0.22rem] border-l-emerald-500 px-6 py-5 max-[760px]:grid-cols-1')}>
         <div>
           <p className="m-0 text-[0.66rem] font-medium text-muted-foreground">Device status</p>
@@ -49,7 +49,7 @@ export function OverviewPage({ overview, applications }: OverviewPageProps) {
         </div>
       </section>
 
-      <section className={panel}>
+      <section className={cn(panel, 'motion-safe:[animation-delay:60ms]')}>
         <div className={sectionHeader}>
           <div>
             <h3 className="m-0 font-display text-[0.82rem] font-medium">Applications</h3>
@@ -84,7 +84,7 @@ export function OverviewPage({ overview, applications }: OverviewPageProps) {
         </div>
       </section>
 
-      <section className={panel}>
+      <section className={cn(panel, 'motion-safe:[animation-delay:120ms]')}>
         <div className={sectionHeader}>
           <div>
             <h3 className="m-0 font-display text-[0.82rem] font-medium">Synchronization</h3>

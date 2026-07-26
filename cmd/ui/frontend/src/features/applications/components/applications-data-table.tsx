@@ -151,7 +151,7 @@ export function ApplicationsDataTable({
   })
 
   return (
-    <div className="overflow-hidden rounded-[0.55rem] border border-border/90 bg-card shadow-sm backdrop-blur-lg">
+    <div className="overflow-hidden rounded-[0.55rem] border border-border/90 bg-card shadow-sm backdrop-blur-lg motion-safe:animate-panel-enter motion-safe:[animation-delay:60ms]">
       <Table>
         <TableHeader className="bg-muted/50">
           {table.getHeaderGroups().map(headerGroup => (
