@@ -1,0 +1,15 @@
+export const statusText: Record<string, string> = {
+  queued: 'Queued',
+  running: 'Running',
+  success: 'Successful',
+  partial: 'Partially successful',
+  error: 'Error',
+  interrupted: 'Interrupted',
+  installed: 'Installed',
+  not_installed: 'Not installed',
+  unknown: 'Unknown',
+  idle: 'Idle',
+  installing: 'Installing',
+  uninstalling: 'Uninstalling',
+  upgrading: 'Upgrading',
+}

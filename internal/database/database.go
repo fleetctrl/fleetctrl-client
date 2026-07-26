@@ -1,186 +1,164 @@
 package database
 
 import (
-	consts "KiskaLE/RustDesk-ID/internal/const"
-	"KiskaLE/RustDesk-ID/internal/utils"
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	consts "KiskaLE/RustDesk-ID/internal/const"
 
 	_ "modernc.org/sqlite"
 )
 
-var db *sql.DB
+var (
+	dbMu        sync.RWMutex
+	db          *sql.DB
+	defaultRepo *SQLiteRepository
+)
 
-// Init initializes the SQLite database with a self-healing mechanism
+// Init opens the service database and applies all migrations. If the database
+// cannot be opened, the original file is retained as a timestamped diagnostic
+// backup before a clean database is created.
 func Init() error {
-	dbPath := filepath.Join(consts.ProgramDataDir, "client.db")
-	maxAttempts := 3
-
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err := tryInit(dbPath)
-		if err == nil {
-			utils.Infof("SQLite database initialized at %s (attempt %d)", dbPath, attempt)
-			return nil
-		}
-
-		utils.Errorf("Database initialization attempt %d failed: %v", attempt, err)
-
-		// Close connection if it was partially opened
-		if db != nil {
-			db.Close()
-			db = nil
-		}
-
-		if attempt < maxAttempts {
-			utils.Infof("Attempting to heal database by deleting: %s", dbPath)
-			if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
-				utils.Errorf("Failed to delete database file: %v", err)
-			}
-			time.Sleep(100 * time.Millisecond) // Small delay before retry
-			continue
-		}
-
-		// Third attempt failed, panic as requested
-		return fmt.Errorf("CRITICAL: SQLite database failed to initialize after %d attempts: %v", maxAttempts, err)
-	}
-
-	return nil
-}
-
-func tryInit(dbPath string) error {
-	// Ensure directory exists
-	if err := os.MkdirAll(consts.ProgramDataDir, 0755); err != nil {
-		return fmt.Errorf("failed to create ProgramData directory: %v", err)
-	}
-
-	var err error
-	db, err = sql.Open("sqlite", dbPath)
+	repo, err := Open(filepath.Join(consts.ProgramDataDir, "client.db"))
 	if err != nil {
-		return fmt.Errorf("failed to open database: %v", err)
+		return err
 	}
-
-	// Test connection
-	if err := db.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %v", err)
-	}
-
-	// Create tables
-	query := `
-	CREATE TABLE IF NOT EXISTS winget_checks (
-		winget_id TEXT PRIMARY KEY,
-		last_check DATETIME NOT NULL
-	);
-	CREATE TABLE IF NOT EXISTS app_errors (
-		release_id TEXT PRIMARY KEY,
-		failures_count INTEGER DEFAULT 0,
-		last_attempt DATETIME
-	);`
-
-	if _, err := db.Exec(query); err != nil {
-		return fmt.Errorf("failed to create tables: %v", err)
-	}
-
+	dbMu.Lock()
+	db = repo.db
+	defaultRepo = repo
+	dbMu.Unlock()
 	return nil
 }
 
-// ShouldCheckWinget returns true if the winget app should be checked for updates
-func ShouldCheckWinget(wingetID string) (bool, error) {
-	if db == nil {
-		return true, nil // Fail open if DB is not initialized
+func Open(path string) (*SQLiteRepository, error) {
+	repo, err := open(path)
+	if err == nil {
+		return repo, nil
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		return nil, fmt.Errorf("initialize database: %w", err)
 	}
 
+	backup := fmt.Sprintf("%s.corrupt-%s", path, time.Now().UTC().Format("20060102T150405Z"))
+	if renameErr := os.Rename(path, backup); renameErr != nil {
+		return nil, fmt.Errorf("initialize database: %w (preserving failed database: %v)", err, renameErr)
+	}
+	repo, retryErr := open(path)
+	if retryErr != nil {
+		return nil, fmt.Errorf("initialize replacement database (original retained at %s): %w", backup, retryErr)
+	}
+	return repo, nil
+}
+
+func open(path string) (*SQLiteRepository, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fmt.Errorf("create database directory: %w", err)
+	}
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	conn.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err = conn.ExecContext(ctx, "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("configure database: %w", err)
+	}
+	repo := &SQLiteRepository{db: conn}
+	if err := repo.migrate(ctx); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := repo.InterruptActiveSyncRuns(ctx, time.Now().UTC()); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("recover interrupted sync runs: %w", err)
+	}
+	return repo, nil
+}
+
+func DefaultRepository() *SQLiteRepository {
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+	return defaultRepo
+}
+
+func Close() error {
+	dbMu.Lock()
+	defer dbMu.Unlock()
+	if db == nil {
+		return nil
+	}
+	err := db.Close()
+	db = nil
+	defaultRepo = nil
+	return err
+}
+
+func ShouldCheckWinget(wingetID string) (bool, error) {
+	repo := DefaultRepository()
+	if repo == nil {
+		return true, nil
+	}
 	var lastCheck time.Time
-	err := db.QueryRow("SELECT last_check FROM winget_checks WHERE winget_id = ?", wingetID).Scan(&lastCheck)
+	err := repo.db.QueryRow("SELECT last_check FROM winget_checks WHERE winget_id = ?", wingetID).Scan(&lastCheck)
 	if err == sql.ErrNoRows {
-		return true, nil // Never checked before
+		return true, nil
 	}
 	if err != nil {
 		return true, err
 	}
-
-	// Only check if last check was more than 24 hours ago
 	return time.Since(lastCheck) >= 24*time.Hour, nil
 }
 
-// ShouldAttemptApp returns true if the application should be attempted (install/uninstall)
 func ShouldAttemptApp(releaseID string) (bool, error) {
-	if db == nil {
+	repo := DefaultRepository()
+	if repo == nil {
 		return true, nil
 	}
-
 	var failures int
 	var lastAttempt time.Time
-	err := db.QueryRow("SELECT failures_count, last_attempt FROM app_errors WHERE release_id = ?", releaseID).Scan(&failures, &lastAttempt)
+	err := repo.db.QueryRow("SELECT failures_count, last_attempt FROM app_errors WHERE release_id = ?", releaseID).Scan(&failures, &lastAttempt)
 	if err == sql.ErrNoRows {
-		return true, nil // Never attempted before
+		return true, nil
 	}
 	if err != nil {
 		return true, err
 	}
-
-	// If failures < 3, allow retry in every loop
-	if failures < 3 {
-		return true, nil
-	}
-
-	// If failures >= 3, wait 24 hours
-	return time.Since(lastAttempt) >= 24*time.Hour, nil
+	return failures < 3 || time.Since(lastAttempt) >= 24*time.Hour, nil
 }
 
-// RecordAppFailure increments the failure count for a release
 func RecordAppFailure(releaseID string) error {
-	if db == nil {
+	repo := DefaultRepository()
+	if repo == nil {
 		return nil
 	}
-
-	_, err := db.Exec(`
-		INSERT INTO app_errors (release_id, failures_count, last_attempt) 
-		VALUES (?, 1, ?) 
-		ON CONFLICT(release_id) DO UPDATE SET 
-			failures_count = failures_count + 1,
-			last_attempt = excluded.last_attempt`,
-		releaseID, time.Now())
-
-	if err != nil {
-		return fmt.Errorf("failed to record app failure: %v", err)
-	}
-	return nil
+	_, err := repo.db.Exec(`INSERT INTO app_errors (release_id, failures_count, last_attempt)
+		VALUES (?, 1, ?) ON CONFLICT(release_id) DO UPDATE SET
+		failures_count = failures_count + 1, last_attempt = excluded.last_attempt`, releaseID, time.Now().UTC())
+	return err
 }
 
-// ResetAppFailures resets the failure count for a release (on success)
 func ResetAppFailures(releaseID string) error {
-	if db == nil {
+	repo := DefaultRepository()
+	if repo == nil {
 		return nil
 	}
-
-	_, err := db.Exec("DELETE FROM app_errors WHERE release_id = ?", releaseID)
-	if err != nil {
-		return fmt.Errorf("failed to reset app failures: %v", err)
-	}
-	return nil
+	_, err := repo.db.Exec("DELETE FROM app_errors WHERE release_id = ?", releaseID)
+	return err
 }
 
-// UpdateWingetCheck updates the last check time for a winget app
 func UpdateWingetCheck(wingetID string) error {
-	if db == nil {
+	repo := DefaultRepository()
+	if repo == nil {
 		return nil
 	}
-
-	_, err := db.Exec("INSERT OR REPLACE INTO winget_checks (winget_id, last_check) VALUES (?, ?)", wingetID, time.Now())
-	if err != nil {
-		return fmt.Errorf("failed to update winget check time: %v", err)
-	}
-
-	return nil
-}
-
-// Close closes the database connection
-func Close() error {
-	if db != nil {
-		return db.Close()
-	}
-	return nil
+	_, err := repo.db.Exec(`INSERT INTO winget_checks (winget_id, last_check) VALUES (?, ?)
+		ON CONFLICT(winget_id) DO UPDATE SET last_check=excluded.last_check`, wingetID, time.Now().UTC())
+	return err
 }

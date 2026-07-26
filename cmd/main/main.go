@@ -4,11 +4,15 @@ import (
 	"KiskaLE/RustDesk-ID/internal/auth"
 	consts "KiskaLE/RustDesk-ID/internal/const"
 	"KiskaLE/RustDesk-ID/internal/database"
+	"KiskaLE/RustDesk-ID/internal/ipc/protocol"
+	ipcserver "KiskaLE/RustDesk-ID/internal/ipc/server"
 	"KiskaLE/RustDesk-ID/internal/manager"
 	"KiskaLE/RustDesk-ID/internal/registry"
 	"KiskaLE/RustDesk-ID/internal/service"
+	synccoordinator "KiskaLE/RustDesk-ID/internal/sync"
 	"KiskaLE/RustDesk-ID/internal/updater"
 	"KiskaLE/RustDesk-ID/internal/utils"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -150,9 +154,21 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 	// Initialize auto-updater
 	updater.InitUpdater(serverURL)
 
-	go ms.StartRustDeskServerSync()
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
+	repository := database.DefaultRepository()
+	coordinator := synccoordinator.NewCoordinator(serviceCtx, repository, ms.RunSync)
+	pipeServer := ipcserver.New(&protocol.Handler{
+		Repository: repository, Coordinator: coordinator, ServerURL: serverURL,
+	})
+	go func() {
+		if err := pipeServer.Serve(serviceCtx); err != nil && serviceCtx.Err() == nil {
+			utils.Errorf("UI IPC server stopped: %v", err)
+		}
+	}()
+	go ms.StartComputerSyncLoop(serviceCtx, coordinator)
 	go ms.StartRustDeskServerTasks()
-	go ms.StartApplicationsManagement()
+	go ms.StartApplicationSyncLoop(serviceCtx, coordinator)
 
 	for {
 		select {
@@ -166,6 +182,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 				}
 			case svc.Stop, svc.Shutdown:
 				changes <- svc.Status{State: svc.StopPending}
+				cancelService()
 				return false, 0
 			default:
 				// ignore other commands
@@ -444,9 +461,21 @@ func main() {
 		// Initialize auto-updater
 		updater.InitUpdater(serverURL)
 
-		go ms.StartRustDeskServerSync()
+		serviceCtx, cancelService := context.WithCancel(context.Background())
+		defer cancelService()
+		repository := database.DefaultRepository()
+		coordinator := synccoordinator.NewCoordinator(serviceCtx, repository, ms.RunSync)
+		pipeServer := ipcserver.New(&protocol.Handler{
+			Repository: repository, Coordinator: coordinator, ServerURL: serverURL,
+		})
+		go func() {
+			if err := pipeServer.Serve(serviceCtx); err != nil && serviceCtx.Err() == nil {
+				utils.Errorf("UI IPC server stopped: %v", err)
+			}
+		}()
+		go ms.StartComputerSyncLoop(serviceCtx, coordinator)
 		go ms.StartRustDeskServerTasks()
-		go ms.StartApplicationsManagement()
+		go ms.StartApplicationSyncLoop(serviceCtx, coordinator)
 		for {
 			time.Sleep(1 * time.Hour)
 		}

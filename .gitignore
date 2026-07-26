@@ -1,3 +1,5 @@
 bin
 certs
 *.exe
+node_modules/
+cmd/ui/build/bin/
