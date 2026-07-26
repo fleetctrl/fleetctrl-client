@@ -31,7 +31,11 @@ export default function App() {
       {error && <ServiceError message={error} onRetry={() => void refresh()} />}
 
       {loading ? (
-        <div className="loading"><span /><span /><span /></div>
+        <div className="flex min-h-72 items-center justify-center gap-1.5">
+          <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground" />
+          <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground [animation-delay:150ms]" />
+          <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground [animation-delay:300ms]" />
+        </div>
       ) : page === 'overview' ? (
         <OverviewPage overview={overview} applications={applications} />
       ) : (

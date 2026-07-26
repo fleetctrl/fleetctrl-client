@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 
+import { cn } from '@/lib/utils'
+
 export type IconName = 'grid' | 'apps' | 'sync' | 'check' | 'warning' | 'server' | 'clock' | 'close'
 
 const paths: Record<IconName, ReactNode> = {
@@ -13,11 +15,11 @@ const paths: Record<IconName, ReactNode> = {
   close: <path d="m6 6 12 12M18 6 6 18" />,
 }
 
-export function Icon({ name }: { name: IconName }) {
+export function Icon({ name, className }: { name: IconName; className?: string }) {
   return (
     <svg
       aria-hidden="true"
-      className="icon"
+      className={cn('size-4 shrink-0', className)}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

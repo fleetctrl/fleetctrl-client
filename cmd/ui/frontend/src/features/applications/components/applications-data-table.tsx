@@ -151,13 +151,13 @@ export function ApplicationsDataTable({
   })
 
   return (
-    <div className="overflow-hidden rounded-md border">
+    <div className="overflow-hidden rounded-[0.55rem] border border-border/90 bg-card shadow-sm backdrop-blur-lg">
       <Table>
-        <TableHeader>
+        <TableHeader className="bg-muted/50">
           {table.getHeaderGroups().map(headerGroup => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map(header => (
-                <TableHead key={header.id}>
+                <TableHead className="h-10 text-[0.67rem]" key={header.id}>
                   {header.isPlaceholder
                     ? null
                     : flexRender(header.column.columnDef.header, header.getContext())}
@@ -170,7 +170,7 @@ export function ApplicationsDataTable({
           {table.getRowModel().rows.length ? table.getRowModel().rows.map(row => (
             <TableRow
               key={row.id}
-              className="cursor-pointer"
+              className="h-[3.6rem] cursor-pointer text-[0.72rem] hover:bg-primary/5"
               onClick={() => onSelect(row.original)}
             >
               {row.getVisibleCells().map(cell => (
