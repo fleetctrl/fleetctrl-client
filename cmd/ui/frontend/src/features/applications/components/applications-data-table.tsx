@@ -12,6 +12,8 @@ import { ArrowUpDown, ChevronRight } from 'lucide-react'
 import type { ManagedApp } from '@/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { formatTime } from '@/shared/lib/date'
+import { statusText } from '@/shared/lib/status'
 import {
   Table,
   TableBody,
@@ -20,21 +22,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-
-const statusText: Record<string, string> = {
-  idle: 'Idle',
-  installed: 'Installed',
-  not_installed: 'Not installed',
-  unknown: 'Unknown',
-  installing: 'Installing',
-  uninstalling: 'Uninstalling',
-  upgrading: 'Upgrading',
-  error: 'Error',
-}
-
-const formatTime = (value?: string) => value
-  ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-  : 'Not yet'
 
 function SortableHeader({
   label,

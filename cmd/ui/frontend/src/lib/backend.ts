@@ -1,4 +1,4 @@
-import type { AppEvent, ManagedApp, Overview, SyncRun } from './types'
+import type { AppEvent, ManagedApp, Overview, SyncRun } from '../types'
 
 function backend() {
   const api = window.go?.main?.UIBackend
