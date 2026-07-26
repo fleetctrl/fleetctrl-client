@@ -1,24 +1,26 @@
-# FleetCtrl Client pro Windows
+# FleetCtrl Client for Windows
 
-FleetCtrl Client se skládá ze dvou programů:
+FleetCtrl Client consists of two programs:
 
-- `fleetctrl-client.exe` – Windows služba, která komunikuje se serverem FleetCtrl.
-- `fleetctrl-ui.exe` – lokální desktopová aplikace pro monitoring služby.
+- `fleetctrl-client.exe` – a Windows service that communicates with the FleetCtrl server.
+- `fleetctrl-ui.exe` – a local desktop application for monitoring the service.
 
-Pro běžnou instalaci je doporučený MSI balíček. Nainstaluje oba programy,
-zaregistruje službu a vytvoří zástupce **FleetCtrl** v nabídce Start.
+The MSI package is recommended for standard installations. It installs both
+programs, registers the service, and creates a **FleetCtrl** shortcut in the
+Start menu.
 
-## Požadavky pro sestavení
+## Build Requirements
 
-Sestavení provádějte na 64bitovém Windows 10 nebo Windows 11.
+Build the client on 64-bit Windows 10 or Windows 11.
 
-- [Go 1.25 nebo novější](https://go.dev/dl/)
-- [Node.js 20 nebo novější](https://nodejs.org/en/download)
+- [Go 1.25 or later](https://go.dev/dl/)
+- [Node.js 20 or later](https://nodejs.org/en/download)
 - Git
 - Microsoft Edge WebView2 Runtime
-- pro MSI také [.NET SDK](https://dotnet.microsoft.com/download) a WiX Toolset v4
+- for the MSI package, also install the [.NET SDK](https://dotnet.microsoft.com/download)
+  and WiX Toolset v4
 
-Verze nástrojů lze zkontrolovat v PowerShellu:
+You can check the installed tool versions in PowerShell:
 
 ```powershell
 go version
@@ -27,11 +29,11 @@ npm --version
 dotnet --version
 ```
 
-## Sestavení EXE souborů
+## Building the EXE Files
 
-### Varianta A: PowerShell
+### Option A: PowerShell
 
-V kořenové složce repozitáře spusťte:
+Run the following commands from the repository root:
 
 ```powershell
 New-Item -ItemType Directory -Force .\bin | Out-Null
@@ -50,33 +52,33 @@ Copy-Item .\cmd\ui\build\bin\fleetctrl-ui.exe `
   .\bin\fleetctrl-ui.exe -Force
 ```
 
-Wails během sestavení UI automaticky spustí `npm install` a `npm run build`
-podle souboru `cmd/ui/wails.json`.
+When building the UI, Wails automatically runs `npm install` and
+`npm run build` as configured in `cmd/ui/wails.json`.
 
-Výsledkem jsou:
+The resulting files are:
 
 ```text
 bin\fleetctrl-client.exe
 bin\fleetctrl-ui.exe
 ```
 
-### Varianta B: Make
+### Option B: Make
 
-Pokud používáte Git Bash, MSYS2 nebo jiné prostředí s GNU Make:
+If you use Git Bash, MSYS2, or another environment with GNU Make:
 
 ```bash
 make build
 ```
 
-Pouze desktopové UI lze sestavit příkazem:
+To build only the desktop UI, run:
 
 ```bash
 make build-ui
 ```
 
-## Vytvoření MSI instalátoru
+## Creating the MSI Installer
 
-Nejdříve nainstalujte WiX Toolset a rozšíření používaná instalátorem:
+First, install WiX Toolset and the extensions used by the installer:
 
 ```powershell
 dotnet tool install --global wix
@@ -85,8 +87,9 @@ wix extension add -g WixToolset.Util.wixext
 wix --version
 ```
 
-Potom sestavte oba EXE soubory podle předchozí kapitoly a vytvořte MSI.
-Hodnotu verze nahraďte aktuální tříčástkovou verzí produktu:
+Then build both EXE files as described in the previous section and create the
+MSI package. Replace the version value with the current three-part product
+version:
 
 ```powershell
 $Version = "2.0.2"
@@ -99,27 +102,27 @@ wix build .\installer\installer.wxs `
   -o .\bin\fleetctrl-client.msi
 ```
 
-Výsledný instalátor bude v `bin\fleetctrl-client.msi`.
+The resulting installer will be located at `bin\fleetctrl-client.msi`.
 
-## Instalace
+## Installation
 
-### Doporučená instalace přes MSI
+### Recommended MSI Installation
 
-Otevřete PowerShell jako správce a spusťte:
+Open PowerShell as an administrator and run:
 
 ```powershell
 msiexec /i .\bin\fleetctrl-client.msi
 ```
 
-Instalátor si vyžádá enrollment token a URL serveru. Potom:
+The installer prompts for an enrollment token and the server URL. It then:
 
-- nainstaluje soubory do `C:\Program Files\fleetctrl`;
-- vytvoří a spustí službu `fleetctrl-client`;
-- nastaví automatické spouštění služby;
-- vytvoří zástupce **FleetCtrl** v nabídce Start;
-- uloží data klienta do `C:\ProgramData\fleetctrl`.
+- installs the files in `C:\Program Files\fleetctrl`;
+- creates and starts the `fleetctrl-client` service;
+- configures the service to start automatically;
+- creates a **FleetCtrl** shortcut in the Start menu;
+- stores client data in `C:\ProgramData\fleetctrl`.
 
-Pro tichou instalaci bez dialogu použijte:
+For an unattended installation without a dialog, run:
 
 ```powershell
 msiexec /i .\bin\fleetctrl-client.msi `
@@ -129,14 +132,16 @@ msiexec /i .\bin\fleetctrl-client.msi `
   SERVER_URL="https://fleetctrl.example.com"
 ```
 
-Instalační log bude uložen do `fleetctrl-install.log` v aktuální složce.
+The installation log will be saved as `fleetctrl-install.log` in the current
+directory.
 
-### Ruční instalace pouze služby
+### Manual Service-Only Installation
 
-Tato varianta nainstaluje jen Windows službu. Nekopíruje desktopové UI a
-nevytvoří zástupce v nabídce Start. Pro kompletní instalaci použijte MSI.
+This option installs only the Windows service. It does not copy the desktop UI
+or create a Start menu shortcut. Use the MSI package for a complete
+installation.
 
-V PowerShellu spuštěném jako správce:
+In PowerShell running as an administrator:
 
 ```powershell
 .\bin\fleetctrl-client.exe install `
@@ -144,93 +149,94 @@ V PowerShellu spuštěném jako správce:
   --url "https://fleetctrl.example.com"
 ```
 
-Služba zkopíruje svůj spustitelný soubor do
-`C:\Program Files\fleetctrl\client.exe`.
+The service copies its executable to `C:\Program Files\fleetctrl\client.exe`.
 
-## Ověření instalace
+## Verifying the Installation
 
-Stav služby:
+Check the service status:
 
 ```powershell
 Get-Service fleetctrl-client
 ```
 
-Nainstalované soubory:
+Check the installed files:
 
 ```powershell
 Get-Item "C:\Program Files\fleetctrl\client.exe"
 Get-Item "C:\Program Files\fleetctrl\fleetctrl-ui.exe"
 ```
 
-Desktopovou aplikaci spusťte z nabídky Start nebo přímo:
+Launch the desktop application from the Start menu or directly:
 
 ```powershell
 & "C:\Program Files\fleetctrl\fleetctrl-ui.exe"
 ```
 
-UI zobrazuje dostupnost služby, poslední synchronizace a stav aplikací
-přiřazených zařízení. Se službou komunikuje pouze lokálně přes zabezpečenou
-named pipe.
+The UI displays service availability, the most recent synchronization, and the
+status of applications assigned to the device. It communicates with the
+service only locally through a secure named pipe.
 
-## Aktualizace
+## Updating
 
-Sestavte MSI s vyšší verzí a spusťte jej stejným způsobem jako při instalaci:
+Build the MSI package with a higher version number and run it in the same way as
+for the initial installation:
 
 ```powershell
 msiexec /i .\bin\fleetctrl-client.msi
 ```
 
-Instalátor předchozí verzi automaticky nahradí.
+The installer automatically replaces the previous version.
 
-## Odinstalace
+## Uninstallation
 
-### Instalace provedená přes MSI
+### MSI Installation
 
-Použijte **Nainstalované aplikace** ve Windows nebo spusťte:
+Use **Installed apps** in Windows or run:
 
 ```powershell
 msiexec /x .\bin\fleetctrl-client.msi
 ```
 
-Tichá odinstalace:
+For an unattended uninstallation:
 
 ```powershell
 msiexec /x .\bin\fleetctrl-client.msi /qn
 ```
 
-Ve výchozím stavu se zachová identita zařízení, aby se klient mohl při další
-instalaci připojit ke stejnému záznamu. Pro odstranění všech dat zařízení:
+By default, the device identity is preserved so that the client can reconnect
+to the same record after a future installation. To remove all device data:
 
 ```powershell
 msiexec /x .\bin\fleetctrl-client.msi /qn PRESERVE_DEVICE_DATA=0
 ```
 
-### Ručně nainstalovaná služba
+### Manually Installed Service
 
-V PowerShellu spuštěném jako správce:
+In PowerShell running as an administrator:
 
 ```powershell
 & "C:\Program Files\fleetctrl\client.exe" remove
 ```
 
-Včetně identity zařízení:
+To also remove the device identity:
 
 ```powershell
 & "C:\Program Files\fleetctrl\client.exe" remove --delete-device-id
 ```
 
-## Logy a řešení problémů
+## Logs and Troubleshooting
 
-Log služby:
+Service log:
 
 ```text
 C:\Program Files\fleetctrl\client.log
 ```
 
-Pokud instalace selže:
+If the installation fails:
 
-1. Ověřte, že PowerShell běží jako správce.
-2. Ověřte dostupnost URL serveru z cílového počítače.
-3. Zkontrolujte platnost enrollment tokenu.
-4. U MSI instalace použijte přepínač `/l*v`, jak je uvedeno výše.
-5. Pokud se nespustí UI, ověřte instalaci Microsoft Edge WebView2 Runtime.
+1. Make sure PowerShell is running as an administrator.
+2. Make sure the server URL is accessible from the target computer.
+3. Check that the enrollment token is valid.
+4. For MSI installations, use the `/l*v` option as shown above.
+5. If the UI does not start, make sure Microsoft Edge WebView2 Runtime is
+   installed.
