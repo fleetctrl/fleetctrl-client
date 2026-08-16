@@ -75,27 +75,33 @@ func (ms *MainService) fetchAssignedApps(ctx context.Context) ([]models.Assigned
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("load assigned applications: %w", err)
 	}
 	defer res.Body.Close()
+
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("server returned %s", res.Status)
 	}
+
 	var response models.AssignedAppsResponse
 	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("decode assigned applications: %w", err)
 	}
+
 	return response.Apps, nil
 }
 
 func stateFromAssignment(app models.AssignedApp, release models.AssignedRelease) database.ManagedAppState {
 	wingetID := ""
+
 	if release.Winget != nil {
 		wingetID = release.Winget.WingetID
 	}
+
 	return database.ManagedAppState{
 		ReleaseID: release.ID, AppID: app.ID, DisplayName: app.DisplayName,
 		Publisher: app.Publisher, Version: release.Version, InstallerType: release.InstallerType,
@@ -107,6 +113,7 @@ func stateFromAssignment(app models.AssignedApp, release models.AssignedRelease)
 func newestAssignments(assigned []models.AssignedApp) ([]database.ManagedAppState, map[string]models.AssignedRelease) {
 	states := make([]database.ManagedAppState, 0, len(assigned))
 	releases := make(map[string]models.AssignedRelease)
+
 	for _, app := range assigned {
 		if len(app.Releases) == 0 {
 			continue
@@ -118,26 +125,31 @@ func newestAssignments(assigned []models.AssignedApp) ([]database.ManagedAppStat
 		states = append(states, stateFromAssignment(app, release))
 		releases[release.ID] = release
 	}
+
 	return states, releases
 }
 
 func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, assigned []models.AssignedApp) (ApplicationSyncResult, error) {
 	var result ApplicationSyncResult
 	repo := database.DefaultRepository()
+
 	if repo == nil {
 		return result, fmt.Errorf("database is not initialized")
 	}
+
 	observedAt := time.Now().UTC()
 	states, releases := newestAssignments(assigned)
+
 	if err := repo.UpsertAssignedApps(ctx, states, observedAt); err != nil {
 		return result, fmt.Errorf("save assignments: %w", err)
 	}
+
 	result.Total = len(states)
 	for _, state := range states {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		installed, err := apps.IsAppInstalled(releases[state.ReleaseID])
+		installed, err := ms.apps.IsInstalled(ctx, releases[state.ReleaseID], ms.serverURL)
 		checkedAt := time.Now().UTC()
 		if err != nil {
 			result.Errors++
@@ -160,18 +172,23 @@ func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, ass
 		}
 		ms.reportReleaseInstallState(state.ReleaseID, reportStatus, nil)
 	}
+
 	result.CompletedAt = time.Now().UTC()
+
 	if result.Errors > 0 {
 		return result, fmt.Errorf("%d application checks failed", result.Errors)
 	}
+
 	return result, nil
 }
 
 func (ms *MainService) RefreshAssignedApplicationStates(ctx context.Context) (ApplicationSyncResult, error) {
 	assigned, err := ms.fetchAssignedApps(ctx)
+
 	if err != nil {
 		return ApplicationSyncResult{}, err
 	}
+
 	return ms.refreshAssignedApplicationStates(ctx, assigned)
 }
 
@@ -180,54 +197,68 @@ func (ms *MainService) ReconcileAssignedApplications(ctx context.Context) (Appli
 	if err != nil {
 		return ApplicationSyncResult{}, err
 	}
+
 	statusResult, statusErr := ms.refreshAssignedApplicationStates(ctx, assigned)
+
 	repo := database.DefaultRepository()
 	if repo == nil {
 		return statusResult, fmt.Errorf("database is not initialized")
 	}
+
 	for _, app := range assigned {
 		if err := ctx.Err(); err != nil {
 			return statusResult, err
 		}
+
 		if len(app.Releases) == 0 {
 			continue
 		}
+
 		release := app.Releases[len(app.Releases)-1]
 		if release.AssignType == "exclude" {
 			continue
 		}
-		installed, detectErr := apps.IsAppInstalled(release)
+
+		installed, detectErr := ms.apps.IsInstalled(ctx, release, ms.serverURL)
 		if detectErr != nil {
 			continue
 		}
+
 		switch {
 		case release.Action == "install" && !installed:
 			ms.performInstall(ctx, app, release)
+
+		case release.Action == "install" && installed && app.AutoUpdate && ms.apps.SupportsUpgrade(ctx, release, ms.serverURL):
+			ms.performWingetUpgrade(ctx, app, release)
+
 		case release.Action == "uninstall" && installed:
 			ms.performUninstall(ctx, app, release)
-		case release.Action == "install" && installed && release.InstallerType == "winget" && release.Winget != nil && app.AutoUpdate:
-			ms.performWingetUpgrade(ctx, app, release)
 		}
 	}
+
 	final, finalErr := ms.refreshAssignedApplicationStates(ctx, assigned)
 	if statusErr != nil || finalErr != nil {
 		final.Errors += statusResult.Errors
 		return final, fmt.Errorf("application reconciliation completed with errors")
 	}
+
 	return final, nil
 }
 
 func (ms *MainService) performInstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) {
 	repo := database.DefaultRepository()
 	allowed, err := database.ShouldAttemptApp(release.ID)
+
 	if err != nil || !allowed {
 		return
 	}
+
 	now := time.Now().UTC()
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationInstalling, "")
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "install_started", Source: "reconcile", CreatedAt: now})
 	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateInstalling, nil)
-	err = apps.InstallApp(release, ms.serverURL)
+	err = ms.apps.Install(ctx, release, ms.serverURL)
+
 	if err != nil {
 		message := summarizeError(err)
 		_ = database.RecordAppFailure(release.ID)
@@ -236,12 +267,14 @@ func (ms *MainService) performInstall(ctx context.Context, app models.AssignedAp
 		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil)
 		return
 	}
-	installed, detectErr := apps.IsAppInstalled(release)
+
+	installed, detectErr := ms.apps.IsInstalled(ctx, release, ms.serverURL)
 	if detectErr != nil || !installed {
 		message := "installation could not be verified"
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
 		return
 	}
+
 	completed := time.Now().UTC()
 	_ = database.ResetAppFailures(release.ID)
 	_ = repo.MarkInstalledByClient(ctx, release.ID, completed)
@@ -259,7 +292,7 @@ func (ms *MainService) performUninstall(ctx context.Context, app models.Assigned
 	now := time.Now().UTC()
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationUninstalling, "")
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_started", Source: "reconcile", CreatedAt: now})
-	if err := apps.UninstallApp(release, ms.serverURL); err != nil {
+	if err := ms.apps.Uninstall(ctx, release, ms.serverURL); err != nil {
 		message := summarizeError(err)
 		_ = database.RecordAppFailure(release.ID)
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
@@ -282,7 +315,7 @@ func (ms *MainService) performWingetUpgrade(ctx context.Context, app models.Assi
 	now := time.Now().UTC()
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationUpgrading, "")
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "upgrade_started", Source: "reconcile", CreatedAt: now})
-	err = apps.UpgradeApp(release)
+	err = ms.apps.Upgrade(ctx, release, ms.serverURL)
 	_ = database.UpdateWingetCheck(release.Winget.WingetID)
 	if err != nil {
 		message := summarizeError(err)

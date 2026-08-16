@@ -6,122 +6,40 @@ import (
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
+	"golang.org/x/sys/windows/registry"
 )
 
-// waitForWingetLock waits for any existing winget process to complete.
-// If the process doesn't complete within the timeout, it will be killed.
-func waitForWingetLock(timeout time.Duration) {
-	checkScript := `Get-Process -Name winget -ErrorAction SilentlyContinue | Select-Object -First 1`
-	killScript := `Get-Process -Name winget -ErrorAction SilentlyContinue | Stop-Process -Force`
+type Manager struct{}
 
-	startTime := time.Now()
-	for {
-		// Check if winget is running
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", checkScript)
-		output, _ := cmd.Output()
-
-		if len(strings.TrimSpace(string(output))) == 0 {
-			// No winget process running
-			return
-		}
-
-		// Check timeout
-		if time.Since(startTime) >= timeout {
-			utils.Info("Winget process didn't complete in time, killing it...")
-			killCmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", killScript)
-			killCmd.Run()
-			time.Sleep(1 * time.Second) // Wait a bit for the process to be killed
-			return
-		}
-
-		utils.Info("Waiting for another winget process to complete...")
-		time.Sleep(2 * time.Second)
-	}
+func NewManager() *Manager {
+	return &Manager{}
 }
 
 // UninstallApp uninstalls an application based on its release type
-func UninstallApp(release models.AssignedRelease, serverURL string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), consts.AppInstallTimeout)
+func (Manager) Uninstall(ctx context.Context, release models.AssignedRelease, serverURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, consts.AppInstallTimeout)
 	defer cancel()
 
-	switch release.InstallerType {
-	case "win32":
-		if release.Win32 == nil {
-			return fmt.Errorf("win32 release data is missing")
-		}
-		if release.Win32.UninstallScript == "" {
-			return fmt.Errorf("uninstall script is missing for win32 release")
-		}
-
-		utils.Infof("Uninstalling win32 app (version %s) using script...", release.Version)
-
-		installerPath, executionDir, cleanup, err := PrepareWin32Binary(release, serverURL, "uninstallation")
-		if err != nil {
-			return err
-		}
-		defer cleanup()
-
-		// Run uninstall script using PowerShell
-		// Replace placeholder in script with actual binary path
-		uninstallScript := strings.ReplaceAll(release.Win32.UninstallScript, "{{INSTALLER_PATH}}", installerPath)
-
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallScript)
-		cmd.Dir = executionDir
-		cmd.Stdout = log.Writer()
-		cmd.Stderr = log.Writer()
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("uninstall script failed: %v", err)
-		}
-
-		utils.Infof("Successfully uninstalled win32 app (version %s)", release.Version)
-		return nil
-
-	case "winget":
-		if release.Winget == nil {
-			return fmt.Errorf("winget release data is missing")
-		}
-		if err := validateWingetID(release.Winget.WingetID); err != nil {
-			return err
-		}
-
-		utils.Infof("Uninstalling winget app %s (version %s)...", release.Winget.WingetID, release.Version)
-
-		// Wait for any existing winget process to complete
-		waitForWingetLock(30 * time.Minute)
-
-		output, err := runWingetCommand(
-			ctx,
-			"uninstall",
-			"--id", release.Winget.WingetID,
-			"--silent",
-			"--force",
-			"--accept-source-agreements",
-			"--disable-interactivity",
-		)
-		if err != nil {
-			return fmt.Errorf("winget uninstall failed: %v (output: %s)", err, strings.TrimSpace(string(output)))
-		}
-
-		utils.Infof("Successfully uninstalled winget app %s", release.Winget.WingetID)
-		return nil
-
-	default:
-		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
+	installer, err := newInstaller(ctx, release, serverURL)
+	if err != nil {
+		return err
 	}
+
+	if err = installer.Uninstall(); err != nil {
+		utils.Error("Error when uninstalling app: " + err.Error())
+		return err
+	}
+
+	return nil
 }
 
 // InstallApp installs an application based on its release type
-func InstallApp(release models.AssignedRelease, serverURL string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), consts.AppInstallTimeout)
+func (m Manager) Install(ctx context.Context, release models.AssignedRelease, serverURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, consts.AppInstallTimeout)
 	defer cancel()
 
 	// Check requirements before installation
@@ -140,96 +58,20 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 		return err
 	}
 
-	switch release.InstallerType {
-	case "win32":
-		if release.Win32 == nil {
-			return fmt.Errorf("win32 release data is missing")
-		}
-		if release.Win32.InstallScript == "" {
-			return fmt.Errorf("install script is missing for win32 release")
-		}
+	installer, err := newInstaller(ctx, release, serverURL)
+	if err != nil {
+		return err
+	}
 
-		utils.Infof("Installing win32 app (version %s)...", release.Version)
-
-		installerPath, executionDir, cleanup, err := PrepareWin32Binary(release, serverURL, "installation")
-		if err != nil {
-			return err
-		}
-		defer cleanup()
-
-		// Run install script using PowerShell
-		// Replace placeholder in script with actual installer path
-		installScript := strings.ReplaceAll(release.Win32.InstallScript, "{{INSTALLER_PATH}}", installerPath)
-
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", installScript)
-		cmd.Dir = executionDir
-		cmd.Stdout = log.Writer()
-		cmd.Stderr = log.Writer()
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("install script failed: %v", err)
-		}
-
-		utils.Infof("Successfully installed win32 app (version %s)", release.Version)
-
-	case "winget":
-		if release.Winget == nil {
-			return fmt.Errorf("winget release data is missing")
-		}
-		if err := validateWingetID(release.Winget.WingetID); err != nil {
-			return err
-		}
-		if err := validateWingetVersion(release.Version); err != nil {
-			return err
-		}
-
-		// Check if a higher version is already installed
-		if release.Version != "" && release.Version != "latest" {
-			installedVersion, err := GetInstalledWingetVersion(release.Winget.WingetID)
-			if err == nil && installedVersion != "" {
-				if CompareVersions(installedVersion, release.Version) > 0 {
-					utils.Infof("Higher version (%s) of %s is already installed (requested version: %s), uninstalling first...", installedVersion, release.Winget.WingetID, release.Version)
-					if err := UninstallApp(release, serverURL); err != nil {
-						return fmt.Errorf("failed to uninstall higher version before downgrade: %v", err)
-					}
-				}
-			}
-		}
-
-		utils.Infof("Installing winget app %s (version %s)...", release.Winget.WingetID, release.Version)
-
-		// Wait for any existing winget process to complete
-		waitForWingetLock(30 * time.Minute)
-
-		// Build winget arguments
-		wingetArgs := []string{
-			"install",
-			"--id", release.Winget.WingetID,
-			"--silent",
-			"--force",
-			"--accept-package-agreements",
-			"--accept-source-agreements",
-			"--disable-interactivity",
-		}
-		if release.Version != "" && release.Version != "latest" {
-			wingetArgs = append(wingetArgs, "-v", release.Version)
-		}
-
-		output, err := runWingetCommand(ctx, wingetArgs...)
-		if err != nil {
-			return fmt.Errorf("winget install failed: %v (output: %s)", err, strings.TrimSpace(string(output)))
-		}
-
-		utils.Infof("Successfully installed winget app %s", release.Winget.WingetID)
-
-	default:
-		return fmt.Errorf("unknown installer type: %s", release.InstallerType)
+	if err = installer.Install(); err != nil {
+		utils.Error("Error when installing app: " + err.Error())
+		return err
 	}
 
 	// Run post-install script if configured.
 	if err := runInstallScriptForPhase(release, serverURL, "post"); err != nil {
 		utils.Errorf("Post-install script failed for release %s: %v. Attempting rollback uninstall...", release.ID, err)
-		if uninstallErr := UninstallApp(release, serverURL); uninstallErr != nil {
+		if uninstallErr := m.Uninstall(ctx, release, serverURL); uninstallErr != nil {
 			return fmt.Errorf("post-install script failed: %v; rollback uninstall failed: %v", err, uninstallErr)
 		}
 		return fmt.Errorf("post-install script failed: %v; rollback uninstall succeeded", err)
@@ -238,124 +80,171 @@ func InstallApp(release models.AssignedRelease, serverURL string) error {
 	return nil
 }
 
-// UpgradeApp upgrades an application based on its release type
-func UpgradeApp(release models.AssignedRelease) error {
-	ctx, cancel := context.WithTimeout(context.Background(), consts.AppInstallTimeout)
-	defer cancel()
-
-	switch release.InstallerType {
-	case "winget":
-		if release.Winget == nil {
-			return fmt.Errorf("winget release data is missing")
-		}
-		if err := validateWingetID(release.Winget.WingetID); err != nil {
-			return err
-		}
-
-		// Wait for any existing winget process to complete
-		waitForWingetLock(30 * time.Minute)
-
-		output, err := runWingetCommand(
-			ctx,
-			"upgrade",
-			"--id", release.Winget.WingetID,
-			"--silent",
-			"--force",
-			"--accept-package-agreements",
-			"--accept-source-agreements",
-			"--disable-interactivity",
-		)
-		if err != nil {
-			if exitError, ok := err.(*exec.ExitError); ok {
-				// 0x8a15002b is the exit code for "No applicable update found"
-				if uint32(exitError.ExitCode()) == 0x8a15002b {
-					utils.Info("No applicable update found")
-					return nil
-				}
-			}
-			return fmt.Errorf("winget upgrade failed: %v (output: %s)", err, strings.TrimSpace(string(output)))
-		}
-
-		return nil
-
-	default:
-		return nil // Only winget supported for now
+// IsAppInstalled checks if an application is installed based on detection rules
+func (Manager) IsInstalled(ctx context.Context, release models.AssignedRelease, serverURL string) (bool, error) {
+	installer, err := newInstaller(ctx, release, serverURL)
+	if err != nil {
+		return false, err
 	}
+
+	return installer.IsInstalled()
 }
 
-// PrepareWin32Binary downloads and prepares a win32 binary for execution (handles ZIPs)
-func PrepareWin32Binary(release models.AssignedRelease, serverURL string, purpose string) (string, string, func(), error) {
-	if release.Win32 == nil {
-		return "", "", nil, fmt.Errorf("win32 release data is missing")
-	}
-
-	tempDir := os.TempDir()
-	installerPath := filepath.Join(tempDir, fmt.Sprintf("%s%s", uuid.New().String(), filepath.Ext(release.Win32.InstallerName)))
-
-	// Download the binary
-	downloadURL := fmt.Sprintf("%s/apps/download/%s", serverURL, release.ID)
-	utils.Infof("Downloading binary for %s from: %s", purpose, downloadURL)
-
-	resp, err := utils.Get(downloadURL, map[string]string{})
+func (Manager) SupportsUpgrade(ctx context.Context, release models.AssignedRelease, serverURL string) bool {
+	installer, err := newInstaller(ctx, release, serverURL)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("failed to download binary: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", "", nil, fmt.Errorf("failed to download binary: HTTP %d", resp.StatusCode)
+		return false
 	}
 
-	// Create local file
-	f, err := os.Create(installerPath)
+	_, ok := installer.(Upgrader)
+	return ok
+}
+
+func (Manager) Upgrade(ctx context.Context, release models.AssignedRelease, serverURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, consts.AppInstallTimeout)
+	defer cancel()
+
+	installer, err := newInstaller(ctx, release, serverURL)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("failed to create local file: %v", err)
+		return err
 	}
 
-	if _, err = utils.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(installerPath)
-		return "", "", nil, fmt.Errorf("failed to save binary: %v", err)
+	upgrader, ok := installer.(Upgrader)
+	if !ok {
+		return fmt.Errorf("installer type %q does not support upgrade", release.InstallerType)
 	}
-	f.Close()
 
-	// Verify hash
-	if release.Win32.Hash != "" {
-		fileHash, err := utils.CalculateFileHash(installerPath)
-		if err != nil {
-			os.Remove(installerPath)
-			return "", "", nil, fmt.Errorf("failed to calculate hash: %v", err)
+	return upgrader.Upgrade()
+}
+
+// checkDetectionRule checks a single detection rule and returns whether it passes
+func checkDetectionRule(rule models.DetectionRule) (bool, error) {
+	path, _ := rule.Config["path"].(string)
+	value, _ := rule.Config["value"].(string)
+	operator, _ := rule.Config["operator"].(string)
+
+	switch rule.Type {
+	case "file":
+		if path == "" {
+			return false, fmt.Errorf("file: missing 'path' in config")
 		}
-		if !strings.EqualFold(fileHash, release.Win32.Hash) {
-			os.Remove(installerPath)
-			return "", "", nil, fmt.Errorf("hash mismatch: expected %s, got %s", release.Win32.Hash, fileHash)
+
+		switch operator {
+		case "exists":
+			_, err := os.Stat(path)
+			return err == nil, nil
+
+		case "version_equal", "version_equal_or_higher", "version_equal_or_lower", "version_higher", "version_lower":
+			if value == "" {
+				return false, fmt.Errorf("file version check: missing 'value' in config")
+			}
+			// Read file version via LiteralPath and environment variable to avoid script injection.
+			cmd := exec.Command("powershell", "-NoProfile", "-Command",
+				`(Get-Item -LiteralPath $env:FLEETCTRL_DETECTION_PATH).VersionInfo.FileVersion`)
+			cmd.Env = append(os.Environ(), "FLEETCTRL_DETECTION_PATH="+path)
+			output, err := cmd.Output()
+			if err != nil {
+				return false, nil // File doesn't exist or has no version
+			}
+			fileVersion := strings.TrimSpace(string(output))
+			if fileVersion == "" {
+				return false, nil
+			}
+			cmp := CompareVersions(fileVersion, value)
+
+			switch operator {
+			case "version_equal":
+				return cmp == 0, nil
+			case "version_equal_or_higher":
+				return cmp >= 0, nil
+			case "version_equal_or_lower":
+				return cmp <= 0, nil
+			case "version_higher":
+				return cmp > 0, nil
+			case "version_lower":
+				return cmp < 0, nil
+			}
+		default:
+			return false, fmt.Errorf("file: unknown operator '%s'", operator)
 		}
-		utils.Info("Hash verified successfully")
+
+	case "registry":
+		if path == "" {
+			return false, fmt.Errorf("registry: missing 'path' in config")
+		}
+
+		hive, keyPath := ParseRegistryPath(path)
+
+		switch operator {
+		case "exists":
+			key, err := registry.OpenKey(hive, keyPath, registry.QUERY_VALUE)
+			if err == nil {
+				key.Close()
+				return true, nil
+			}
+			return false, nil
+
+		case "string":
+			// Check if registry value equals the expected string
+			// Path format: HKLM\...\KeyName\ValueName
+			lastBackslash := strings.LastIndex(keyPath, "\\")
+			if lastBackslash == -1 {
+				return false, fmt.Errorf("registry string: invalid path format, expected key\\valueName")
+			}
+			regKeyPath := keyPath[:lastBackslash]
+			valueName := keyPath[lastBackslash+1:]
+
+			key, err := registry.OpenKey(hive, regKeyPath, registry.QUERY_VALUE)
+			if err != nil {
+				return false, nil
+			}
+			defer key.Close()
+			val, _, err := key.GetStringValue(valueName)
+			if err != nil {
+				return false, nil
+			}
+			return val == value, nil
+
+		case "version_equal", "version_equal_or_higher", "version_equal_or_lower", "version_higher", "version_lower":
+			// Compare registry value as version
+			lastBackslash := strings.LastIndex(keyPath, "\\")
+			if lastBackslash == -1 {
+				return false, fmt.Errorf("registry version: invalid path format")
+			}
+			regKeyPath := keyPath[:lastBackslash]
+			valueName := keyPath[lastBackslash+1:]
+
+			key, err := registry.OpenKey(hive, regKeyPath, registry.QUERY_VALUE)
+			if err != nil {
+				return false, nil
+			}
+			defer key.Close()
+			val, _, err := key.GetStringValue(valueName)
+			if err != nil {
+				return false, nil
+			}
+
+			cmp := CompareVersions(val, value)
+			switch operator {
+			case "version_equal":
+				return cmp == 0, nil
+			case "version_equal_or_higher":
+				return cmp >= 0, nil
+			case "version_equal_or_lower":
+				return cmp <= 0, nil
+			case "version_higher":
+				return cmp > 0, nil
+			case "version_lower":
+				return cmp < 0, nil
+			}
+
+		default:
+			return false, fmt.Errorf("registry: unknown operator '%s'", operator)
+		}
+
+	default:
+		return false, fmt.Errorf("unknown detection type: %s", rule.Type)
 	}
 
-	executionDir := tempDir
-	var cleanupExtract func()
-
-	// If it's a ZIP, extract it
-	if strings.HasSuffix(strings.ToLower(release.Win32.InstallerName), ".zip") {
-		extractDir := filepath.Join(tempDir, fmt.Sprintf("extract_%s_%s", purpose, release.ID))
-		os.MkdirAll(extractDir, os.ModePerm)
-		utils.Infof("Extracting ZIP for %s to: %s", purpose, extractDir)
-		if err := utils.Unzip(installerPath, extractDir); err != nil {
-			os.Remove(installerPath)
-			os.RemoveAll(extractDir)
-			return "", "", nil, fmt.Errorf("failed to unzip binary: %v", err)
-		}
-		executionDir = extractDir
-		cleanupExtract = func() { os.RemoveAll(extractDir) }
-	}
-
-	cleanupAll := func() {
-		os.Remove(installerPath)
-		if cleanupExtract != nil {
-			cleanupExtract()
-		}
-	}
-
-	return installerPath, executionDir, cleanupAll, nil
+	return false, nil
 }

@@ -53,7 +53,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 	defer database.Close()
 
 	as := auth.NewAuthService(serverURL)
-	ms := service.NewMainService(as, serverURL)
+	ms := service.NewMainService(as, serverURL, nil)
 	deviceID, hasDeviceID, err := auth.LoadDeviceID()
 	if err != nil {
 		log.Fatalln("error getting device ID from registry: ", err)
@@ -395,7 +395,7 @@ func main() {
 		}
 
 		as := auth.NewAuthService(serverURL)
-		ms := service.NewMainService(as, serverURL)
+		ms := service.NewMainService(as, serverURL, nil)
 		deviceID, hasDeviceID, err := auth.LoadDeviceID()
 		if err != nil {
 			log.Fatalf("chyba při načítání DeviceID: %v", err)
