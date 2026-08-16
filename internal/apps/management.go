@@ -15,6 +15,10 @@ import (
 
 type Manager struct{}
 
+type UpdateResult struct {
+	Attempted bool
+}
+
 func NewManager() *Manager {
 	return &Manager{}
 }
@@ -90,31 +94,37 @@ func (Manager) IsInstalled(ctx context.Context, release models.AssignedRelease, 
 	return installer.IsInstalled()
 }
 
-func (Manager) SupportsUpgrade(ctx context.Context, release models.AssignedRelease, serverURL string) bool {
-	installer, err := newInstaller(ctx, release, serverURL)
-	if err != nil {
-		return false
-	}
-
-	_, ok := installer.(Upgrader)
-	return ok
-}
-
-func (Manager) Upgrade(ctx context.Context, release models.AssignedRelease, serverURL string) error {
+func (Manager) Update(ctx context.Context, release models.AssignedRelease, serverURL string) (UpdateResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, consts.AppInstallTimeout)
 	defer cancel()
 
 	installer, err := newInstaller(ctx, release, serverURL)
 	if err != nil {
-		return err
+		return UpdateResult{}, err
 	}
 
-	upgrader, ok := installer.(Upgrader)
+	updater, ok := installer.(Updater)
 	if !ok {
-		return fmt.Errorf("installer type %q does not support upgrade", release.InstallerType)
+		return UpdateResult{}, nil
 	}
 
-	return upgrader.Upgrade()
+	checker, ok := installer.(UpdateChecker)
+	if ok {
+		shouldCheck, err := checker.ShouldCheckUpdate()
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		if !shouldCheck {
+			return UpdateResult{}, nil
+		}
+	}
+
+	result := UpdateResult{Attempted: true}
+	err = updater.Update()
+	if ok {
+		_ = checker.MarkUpdateChecked()
+	}
+	return result, err
 }
 
 // checkDetectionRule checks a single detection rule and returns whether it passes

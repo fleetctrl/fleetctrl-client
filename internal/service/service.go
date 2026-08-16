@@ -17,8 +17,7 @@ type ApplicationManager interface {
 	IsInstalled(ctx context.Context, release models.AssignedRelease, serverURL string) (bool, error)
 	Install(ctx context.Context, release models.AssignedRelease, serverURL string) error
 	Uninstall(ctx context.Context, release models.AssignedRelease, serverURL string) error
-	SupportsUpgrade(ctx context.Context, release models.AssignedRelease, serverURL string) bool
-	Upgrade(ctx context.Context, release models.AssignedRelease, serverURL string) error
+	Update(ctx context.Context, release models.AssignedRelease, serverURL string) (apps.UpdateResult, error)
 }
 
 type MainService struct {

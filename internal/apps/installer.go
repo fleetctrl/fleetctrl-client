@@ -12,8 +12,13 @@ type Installer interface {
 	IsInstalled() (bool, error)
 }
 
-type Upgrader interface {
-	Upgrade() error
+type Updater interface {
+	Update() error
+}
+
+type UpdateChecker interface {
+	ShouldCheckUpdate() (bool, error)
+	MarkUpdateChecked() error
 }
 
 func newInstaller(ctx context.Context, release models.AssignedRelease, serverURL string) (Installer, error) {

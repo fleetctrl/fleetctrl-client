@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"KiskaLE/RustDesk-ID/internal/database"
 	"KiskaLE/RustDesk-ID/internal/models"
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"context"
@@ -136,7 +137,7 @@ func (wi *wingetInstaller) IsInstalled() (bool, error) {
 	return false, nil
 }
 
-func (wi *wingetInstaller) Upgrade() error {
+func (wi *wingetInstaller) Update() error {
 	if wi.release == nil {
 		return fmt.Errorf("winget release data is missing")
 	}
@@ -173,6 +174,30 @@ func (wi *wingetInstaller) Upgrade() error {
 	}
 
 	return nil
+}
+
+func (wi *wingetInstaller) ShouldCheckUpdate() (bool, error) {
+	if wi.release == nil {
+		return false, fmt.Errorf("winget release data is missing")
+	}
+
+	if err := validateWingetID(wi.release.WingetID); err != nil {
+		return false, err
+	}
+
+	return database.ShouldCheckWinget(wi.release.WingetID)
+}
+
+func (wi *wingetInstaller) MarkUpdateChecked() error {
+	if wi.release == nil {
+		return fmt.Errorf("winget release data is missing")
+	}
+
+	if err := validateWingetID(wi.release.WingetID); err != nil {
+		return err
+	}
+
+	return database.UpdateWingetCheck(wi.release.WingetID)
 }
 
 // waitForWingetLock waits for any existing winget process to complete.

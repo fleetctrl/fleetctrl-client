@@ -228,8 +228,8 @@ func (ms *MainService) ReconcileAssignedApplications(ctx context.Context) (Appli
 		case release.Action == "install" && !installed:
 			ms.performInstall(ctx, app, release)
 
-		case release.Action == "install" && installed && app.AutoUpdate && ms.apps.SupportsUpgrade(ctx, release, ms.serverURL):
-			ms.performWingetUpgrade(ctx, app, release)
+		case release.Action == "install" && installed && app.AutoUpdate:
+			ms.performUpdate(ctx, app, release)
 
 		case release.Action == "uninstall" && installed:
 			ms.performUninstall(ctx, app, release)
@@ -306,25 +306,28 @@ func (ms *MainService) performUninstall(ctx context.Context, app models.Assigned
 	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateUninstalled, nil)
 }
 
-func (ms *MainService) performWingetUpgrade(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) {
-	shouldCheck, err := database.ShouldCheckWinget(release.Winget.WingetID)
-	if err != nil || !shouldCheck {
-		return
-	}
+func (ms *MainService) performUpdate(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) {
 	repo := database.DefaultRepository()
 	now := time.Now().UTC()
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationUpgrading, "")
-	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "upgrade_started", Source: "reconcile", CreatedAt: now})
-	err = ms.apps.Upgrade(ctx, release, ms.serverURL)
-	_ = database.UpdateWingetCheck(release.Winget.WingetID)
+	result, err := ms.apps.Update(ctx, release, ms.serverURL)
 	if err != nil {
 		message := summarizeError(err)
+		if result.Attempted {
+			_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "update_started", Source: "reconcile", CreatedAt: now})
+		}
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
-		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "upgrade_failed", Source: "reconcile", Message: message, CreatedAt: time.Now().UTC()})
+		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "update_failed", Source: "reconcile", Message: message, CreatedAt: time.Now().UTC()})
 		return
 	}
+	if !result.Attempted {
+		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationIdle, "")
+		return
+	}
+
+	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "update_started", Source: "reconcile", CreatedAt: now})
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationIdle, "")
-	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "upgrade_succeeded", Source: "reconcile", CreatedAt: time.Now().UTC()})
+	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "update_succeeded", Source: "reconcile", CreatedAt: time.Now().UTC()})
 }
 
 func summarizeError(err error) string {

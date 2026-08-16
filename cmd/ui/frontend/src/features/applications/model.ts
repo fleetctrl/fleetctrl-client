@@ -34,6 +34,9 @@ export function applicationEventLabel(type: string) {
     upgrade_started: 'Upgrade started',
     upgrade_succeeded: 'Upgrade completed',
     upgrade_failed: 'Upgrade failed',
+    update_started: 'Update started',
+    update_succeeded: 'Update completed',
+    update_failed: 'Update failed',
   }
 
   return labels[type] || type
