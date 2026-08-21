@@ -362,7 +362,7 @@ func (ms *MainService) RunSync(ctx context.Context, kind database.SyncKind) (syn
 		return synccoordinator.Result{Status: status, Details: result}, err
 	case database.SyncFull:
 		device, deviceErr := ms.SyncComputerOnce(ctx)
-		appResult, appErr := ms.RefreshAssignedApplicationStates(ctx)
+		appResult, appErr := ms.ReconcileAssignedApplications(ctx)
 		details := map[string]any{"device": device, "applications": appResult}
 		if deviceErr != nil || appErr != nil {
 			details["device_error"] = errorString(deviceErr)
