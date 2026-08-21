@@ -151,13 +151,13 @@ export function ApplicationsDataTable({
   })
 
   return (
-    <div className="overflow-hidden rounded-[0.55rem] border border-border/90 bg-card shadow-sm backdrop-blur-lg motion-safe:animate-panel-enter motion-safe:[animation-delay:60ms]">
+    <div className="overflow-hidden rounded-md border border-border bg-card">
       <Table>
-        <TableHeader className="bg-muted/50">
+        <TableHeader className="bg-muted">
           {table.getHeaderGroups().map(headerGroup => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map(header => (
-                <TableHead className="h-10 text-[0.67rem]" key={header.id}>
+                <TableHead className="h-9 text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground" key={header.id}>
                   {header.isPlaceholder
                     ? null
                     : flexRender(header.column.columnDef.header, header.getContext())}
@@ -170,7 +170,7 @@ export function ApplicationsDataTable({
           {table.getRowModel().rows.length ? table.getRowModel().rows.map(row => (
             <TableRow
               key={row.id}
-              className="h-[3.6rem] cursor-pointer text-[0.72rem] hover:bg-primary/5"
+              className="h-14 cursor-pointer text-xs hover:bg-muted/60"
               onClick={() => onSelect(row.original)}
             >
               {row.getVisibleCells().map(cell => (

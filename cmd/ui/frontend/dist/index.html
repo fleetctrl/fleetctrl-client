@@ -1,12 +1,21 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>FleetCtrl</title>
-    <script type="module" crossorigin src="/assets/index-BGUEUxCG.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CNiq832S.css">
+    <script>
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('fleetctrl-theme')
+          var dark = stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', dark)
+        } catch (e) {}
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-E0hjMOP2.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-0ByFSaA4.css">
   </head>
   <body>
     <div id="root"></div>
