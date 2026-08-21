@@ -63,7 +63,14 @@ func (h *Handler) Handle(ctx context.Context, request Request) Response {
 		if err != nil {
 			return fail(DatabaseUnavailable, "Seznam aplikací nyní nelze načíst.")
 		}
-		response.OK, response.Result = true, apps
+		visible := make([]database.ManagedAppState, 0, len(apps))
+		for _, app := range apps {
+			if app.DesiredAction == "uninstall" {
+				continue
+			}
+			visible = append(visible, app)
+		}
+		response.OK, response.Result = true, visible
 	case "get_app_events":
 		var params AppEventsParams
 		if json.Unmarshal(request.Params, &params) != nil || strings.TrimSpace(params.ReleaseID) == "" {
