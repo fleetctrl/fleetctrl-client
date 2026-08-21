@@ -8,6 +8,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
@@ -27,6 +28,13 @@ func main() {
 		AssetServer:      &assetserver.Options{Assets: assets},
 		OnStartup:        backend.Startup,
 		Bind:             []any{backend},
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "fleetctl-ui-91bf5ebf-3a32-43e9-bd9c-cbcefb58d57c",
+			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
+				wailsruntime.WindowUnminimise(backend.ctx)
+				wailsruntime.WindowShow(backend.ctx)
+			},
+		},
 		Windows: &windows.Options{
 			WebviewIsTransparent: true,
 			WindowIsTranslucent:  true,
