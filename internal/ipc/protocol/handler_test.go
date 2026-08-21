@@ -29,6 +29,8 @@ func (r *handlerRepo) GetLatestSyncRuns(context.Context) ([]database.SyncRun, er
 	return r.runs, nil
 }
 func (r *handlerRepo) InterruptActiveSyncRuns(context.Context, time.Time) error { return nil }
+func (r *handlerRepo) PruneSyncRuns(context.Context) error                      { return nil }
+func (r *handlerRepo) PruneAppEvents(context.Context) error                     { return nil }
 func (r *handlerRepo) UpsertAssignedApps(context.Context, []database.ManagedAppState, time.Time) error {
 	return nil
 }

@@ -19,25 +19,16 @@ export function filterApplications(applications: ManagedApp[], filter: Applicati
   })
 }
 
-export function applicationEventLabel(type: string) {
-  const labels: Record<string, string> = {
-    assigned: 'Application assigned',
-    assignment_changed: 'Assignment changed',
-    detection_installed: 'Installation detected',
-    detection_not_installed: 'Installation not detected',
-    install_started: 'Installation started',
-    install_succeeded: 'Installation completed',
-    install_failed: 'Installation failed',
-    uninstall_started: 'Uninstallation started',
-    uninstall_succeeded: 'Uninstallation completed',
-    uninstall_failed: 'Uninstallation failed',
-    upgrade_started: 'Upgrade started',
-    upgrade_succeeded: 'Upgrade completed',
-    upgrade_failed: 'Upgrade failed',
-    update_started: 'Update started',
-    update_succeeded: 'Update completed',
-    update_failed: 'Update failed',
-  }
+const outcomeEventLabels: Record<string, string> = {
+  install_succeeded: 'Installed',
+  uninstall_succeeded: 'Removed',
+  update_succeeded: 'Updated',
+}
 
-  return labels[type] || type
+export function isOutcomeEvent(type: string) {
+  return type in outcomeEventLabels
+}
+
+export function applicationEventLabel(type: string) {
+  return outcomeEventLabels[type] || type
 }

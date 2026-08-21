@@ -41,6 +41,8 @@ func (m *memoryRepo) GetSyncRun(_ context.Context, id string) (database.SyncRun,
 }
 func (m *memoryRepo) GetLatestSyncRuns(context.Context) ([]database.SyncRun, error) { return nil, nil }
 func (m *memoryRepo) InterruptActiveSyncRuns(context.Context, time.Time) error      { return nil }
+func (m *memoryRepo) PruneSyncRuns(context.Context) error                           { return nil }
+func (m *memoryRepo) PruneAppEvents(context.Context) error                          { return nil }
 func (m *memoryRepo) UpsertAssignedApps(context.Context, []database.ManagedAppState, time.Time) error {
 	return nil
 }

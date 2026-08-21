@@ -90,6 +90,8 @@ type Repository interface {
 	GetSyncRun(context.Context, string) (SyncRun, error)
 	GetLatestSyncRuns(context.Context) ([]SyncRun, error)
 	InterruptActiveSyncRuns(context.Context, time.Time) error
+	PruneSyncRuns(context.Context) error
+	PruneAppEvents(context.Context) error
 	UpsertAssignedApps(context.Context, []ManagedAppState, time.Time) error
 	UpdateDetectionState(context.Context, string, DetectionStatus, time.Time, string) error
 	UpdateOperationState(context.Context, string, OperationStatus, string) error

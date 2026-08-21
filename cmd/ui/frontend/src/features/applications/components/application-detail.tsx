@@ -3,7 +3,7 @@ import { formatTime } from '@/shared/lib/date'
 import { statusText } from '@/shared/lib/status'
 import type { AppEvent, ManagedApp } from '@/types'
 
-import { applicationEventLabel } from '../model'
+import { applicationEventLabel, isOutcomeEvent } from '../model'
 
 interface ApplicationDetailProps {
   application: ManagedApp
@@ -11,11 +11,14 @@ interface ApplicationDetailProps {
   onClose: () => void
 }
 
+const maxVisibleEvents = 5
+
 export function ApplicationDetail({
   application,
   events,
   onClose,
 }: ApplicationDetailProps) {
+  const visibleEvents = events.filter(event => isOutcomeEvent(event.event_type)).slice(0, maxVisibleEvents)
   return (
     <Sheet open onOpenChange={open => { if (!open) onClose() }}>
       <SheetContent className="w-full overflow-y-auto border-l-border bg-background p-5 shadow-xl sm:max-w-md">
@@ -56,9 +59,9 @@ export function ApplicationDetail({
         )}
         <div className="mt-5">
           <h3 className="mb-3 text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground">Recent events</h3>
-          {events.length === 0 ? (
+          {visibleEvents.length === 0 ? (
             <p className="text-[0.7rem] text-muted-foreground">No events recorded yet.</p>
-          ) : events.map(event => (
+          ) : visibleEvents.map(event => (
             <div className="grid grid-cols-[0.5rem_1fr] gap-2.5 border-b border-border py-2" key={event.id}>
               <span className="mt-1.5 size-1.5 rounded-full bg-primary" />
               <div>

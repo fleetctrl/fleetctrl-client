@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ManagedApp } from '@/types'
 
-import { applicationEventLabel, filterApplications } from './model'
+import { applicationEventLabel, filterApplications, isOutcomeEvent } from './model'
 
 const applications: ManagedApp[] = [
   {
@@ -55,8 +55,21 @@ describe('filterApplications', () => {
 })
 
 describe('applicationEventLabel', () => {
-  it('uses a friendly known label and preserves unknown event types', () => {
-    expect(applicationEventLabel('install_succeeded')).toBe('Installation completed')
+  it('uses a short outcome label and preserves unknown event types', () => {
+    expect(applicationEventLabel('install_succeeded')).toBe('Installed')
+    expect(applicationEventLabel('uninstall_succeeded')).toBe('Removed')
+    expect(applicationEventLabel('update_succeeded')).toBe('Updated')
     expect(applicationEventLabel('custom_event')).toBe('custom_event')
+  })
+})
+
+describe('isOutcomeEvent', () => {
+  it('keeps only install, removal and update outcomes', () => {
+    expect(isOutcomeEvent('install_succeeded')).toBe(true)
+    expect(isOutcomeEvent('uninstall_succeeded')).toBe(true)
+    expect(isOutcomeEvent('update_succeeded')).toBe(true)
+    expect(isOutcomeEvent('install_started')).toBe(false)
+    expect(isOutcomeEvent('update_failed')).toBe(false)
+    expect(isOutcomeEvent('detection_installed')).toBe(false)
   })
 })

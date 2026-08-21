@@ -51,7 +51,7 @@ func (r *SQLiteRepository) GetSyncRun(ctx context.Context, id string) (SyncRun, 
 func (r *SQLiteRepository) GetLatestSyncRuns(ctx context.Context) ([]SyncRun, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, kind, trigger, status, started_at,
 		completed_at, COALESCE(error_message,''), COALESCE(details_json,''), created_at
-		FROM sync_runs ORDER BY created_at DESC LIMIT 50`)
+		FROM sync_runs ORDER BY created_at DESC LIMIT ?`, syncRunKeepLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +71,31 @@ func (r *SQLiteRepository) InterruptActiveSyncRuns(ctx context.Context, at time.
 	_, err := r.db.ExecContext(ctx, `UPDATE sync_runs SET status=?, completed_at=?,
 		error_message=CASE WHEN error_message IS NULL OR error_message='' THEN 'Service restarted during synchronization' ELSE error_message END
 		WHERE status IN (?, ?)`, SyncInterrupted, at, SyncQueued, SyncRunning)
+	return err
+}
+
+const (
+	syncRunKeepLimit  = 50
+	appEventKeepLimit = 100
+)
+
+// PruneSyncRuns keeps only the most recent sync runs. Periodic checks produce
+// a run each time, so history is trimmed to avoid unbounded growth; only the
+// latest runs are ever read.
+func (r *SQLiteRepository) PruneSyncRuns(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM sync_runs WHERE id NOT IN (
+		SELECT id FROM sync_runs ORDER BY created_at DESC LIMIT ?)`, syncRunKeepLimit)
+	return err
+}
+
+// PruneAppEvents keeps only the most recent events per release so repeated
+// operations on the same application cannot grow the table indefinitely.
+func (r *SQLiteRepository) PruneAppEvents(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM app_events WHERE id IN (
+		SELECT id FROM (
+			SELECT id, ROW_NUMBER() OVER (PARTITION BY release_id ORDER BY created_at DESC, id DESC) AS rn
+			FROM app_events
+		) WHERE rn > ?)`, appEventKeepLimit)
 	return err
 }
 
@@ -237,7 +262,10 @@ func insertEvent(ctx context.Context, q interface {
 }
 
 func (r *SQLiteRepository) AppendAppEvent(ctx context.Context, event AppEvent) error {
-	return insertEvent(ctx, r.db, event)
+	if err := insertEvent(ctx, r.db, event); err != nil {
+		return err
+	}
+	return r.PruneAppEvents(ctx)
 }
 
 func (r *SQLiteRepository) GetAppEvents(ctx context.Context, releaseID string, limit int) ([]AppEvent, error) {

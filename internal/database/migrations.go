@@ -63,6 +63,15 @@ var migrations = []string{
 		created_at DATETIME NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_sync_runs_kind_created ON sync_runs(kind, created_at DESC);`,
+	`DELETE FROM sync_runs WHERE id NOT IN (
+		SELECT id FROM sync_runs ORDER BY created_at DESC LIMIT 50
+	);
+	DELETE FROM app_events WHERE id IN (
+		SELECT id FROM (
+			SELECT id, ROW_NUMBER() OVER (PARTITION BY release_id ORDER BY created_at DESC, id DESC) AS rn
+			FROM app_events
+		) WHERE rn > 100
+	);`,
 }
 
 func (r *SQLiteRepository) migrate(ctx context.Context) error {

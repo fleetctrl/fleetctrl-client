@@ -121,6 +121,7 @@ func (c *Coordinator) execute(run database.SyncRun) {
 		run.Status = database.SyncSuccess
 	}
 	_ = c.repo.UpdateSyncRun(context.Background(), run)
+	_ = c.repo.PruneSyncRuns(context.Background())
 }
 
 func (c *Coordinator) GetRun(ctx context.Context, id string) (database.SyncRun, error) {
