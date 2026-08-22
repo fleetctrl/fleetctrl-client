@@ -139,6 +139,48 @@ func LoadDeviceID() (string, bool, error) {
 	return deviceID, true, nil
 }
 
+func pendingEnrollTokenPath() string {
+	return filepath.Join(consts.ProgramDataDir, "tokens", "enroll_token.txt")
+}
+
+func SavePendingEnrollToken(token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("enrollment token is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(pendingEnrollTokenPath()), 0700); err != nil {
+		return err
+	}
+	enc, err := dpapi.EncryptMachineLocal(token)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(pendingEnrollTokenPath(), []byte(enc), 0600)
+}
+
+func LoadPendingEnrollToken() (string, bool, error) {
+	enc, err := os.ReadFile(pendingEnrollTokenPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	dec, err := dpapi.Decrypt(string(enc))
+	if err != nil {
+		return "", false, err
+	}
+	return strings.TrimSpace(dec), true, nil
+}
+
+func ClearPendingEnrollToken() error {
+	err := os.Remove(pendingEnrollTokenPath())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // Auth
 func generateKeys() (Keys, error) {
 	// 1) Generate EC P-256 keypair (recommended for DPoP)

@@ -59,7 +59,58 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 		log.Fatalln("error getting device ID from registry: ", err)
 	}
 	if !hasDeviceID {
-		log.Fatalln("DeviceID is missing. Re-enroll or reinstall the client.")
+		pendingToken, tokFound, tokErr := auth.LoadPendingEnrollToken()
+		if tokErr != nil || !tokFound || pendingToken == "" {
+			log.Fatalln("DeviceID is missing and no pending enrollment token exists. Re-enroll or reinstall the client.")
+		}
+
+		delay := 5 * time.Second
+		const maxDelay = 15 * time.Minute
+
+		for {
+			ok, perr := utils.Ping(serverURL)
+			var enrolled bool
+			if perr == nil && ok {
+				enrollment, eerr := as.Enroll(pendingToken)
+				if eerr == nil && enrollment.DeviceID != "" {
+					if serr := auth.SaveDeviceID(enrollment.DeviceID); serr != nil {
+						utils.Errorf("failed to save DeviceID: %v", serr)
+					} else if serr := auth.SaveRefershToken(enrollment.Tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); serr != nil {
+						utils.Errorf("failed to save refresh token after enrollment: %v", serr)
+					} else {
+						if cerr := auth.ClearPendingEnrollToken(); cerr != nil {
+							utils.Errorf("failed to clear pending enrollment token: %v", cerr)
+						}
+					}
+					deviceID = enrollment.DeviceID
+					enrolled = true
+				} else {
+					utils.Errorf("enrollment attempt failed: %v", eerr)
+				}
+			} else {
+				utils.Errorf("server unreachable during enrollment: %v", perr)
+			}
+			if enrolled {
+				break
+			}
+
+			utils.Infof("Retrying enrollment in %v...", delay)
+			select {
+			case c := <-r:
+				switch c.Cmd {
+				case svc.Stop, svc.Shutdown:
+					changes <- svc.Status{State: svc.StopPending}
+					return false, 0
+				case svc.Interrogate:
+					changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+				}
+			case <-time.After(delay):
+			}
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
 	}
 
 	var registered bool
@@ -355,6 +406,7 @@ func main() {
 			return
 		case "update":
 			updateCmd := flag.NewFlagSet("update", flag.ExitOnError)
+			isMSI := updateCmd.Bool("msi", false, "Update triggered by MSI upgrade (binary already replaced)")
 			installerLog := updateCmd.String("installer-log", "", "Installer log file path")
 
 			err := updateCmd.Parse(os.Args[2:])
@@ -368,9 +420,9 @@ func main() {
 				os.Exit(1)
 			}
 
-			logInstallerExecutionContext("update", "", false)
+			logInstallerExecutionContext("update", "", *isMSI)
 
-			err = manager.UpdateService()
+			err = manager.UpdateService(*isMSI)
 			if err != nil {
 				log.Fatalf("update failed. See log: %s. Error: %v", logPath, err)
 			}
@@ -380,7 +432,7 @@ func main() {
 	}
 
 	// redirect logger output to a custom writer that opens/closes the file for each write
-	logPath := filepath.Join(consts.TargetDir, "client.log")
+	logPath := filepath.Join(consts.InstallDir(), "client.log")
 	log.SetOutput(logWriter{path: logPath})
 
 	// set format (date, time, file:line)

@@ -2,7 +2,6 @@ package updater
 
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
-	"KiskaLE/RustDesk-ID/internal/registry"
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,11 +11,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
-
-	winreg "golang.org/x/sys/windows/registry"
+	"time"
 )
 
 // UpdateInfo contains information about an available update parsed from X-Client-Update header
@@ -66,8 +66,9 @@ func CheckUpdateHeader(resp *http.Response) *UpdateInfo {
 		return nil
 	}
 
-	// Check if the version is actually different (simple string comparison as per docs)
-	if info.Version == consts.Version {
+	// Only trigger an update when the advertised version is actually newer.
+	// Plain inequality would attempt downgrades, which MajorUpgrade rejects.
+	if compareVersions(info.Version, consts.Version) <= 0 {
 		return nil
 	}
 
@@ -185,7 +186,7 @@ func (u *Updater) getInstallerExtension(info *UpdateInfo, contentType string) st
 	contentType = strings.ToLower(strings.TrimSpace(contentType))
 	updateID := strings.ToLower(strings.TrimSpace(info.ID))
 
-	if strings.Contains(contentType, "msi") || strings.HasSuffix(updateID, ".msi") || u.isMSIInstallation() {
+	if strings.Contains(contentType, "msi") || strings.HasSuffix(updateID, ".msi") {
 		return ".msi"
 	}
 
@@ -222,16 +223,13 @@ func (u *Updater) verifyHash(filePath, expectedHash string) error {
 func (u *Updater) applyUpdate(newBinaryPath, newVersion string) error {
 	utils.Infof("Launching update process for %s...", newBinaryPath)
 
-	var cmd *exec.Cmd
 	if strings.HasSuffix(strings.ToLower(newBinaryPath), ".msi") {
-		// Run msiexec for MSI update
-		utils.Infof("Applying MSI update using msiexec...")
-		cmd = exec.Command("msiexec", "/i", newBinaryPath, "/qn", "/norestart")
-	} else {
-		// Run the new binary with "update" command for EXE update
-		utils.Infof("Launching new binary for self-update...")
-		cmd = exec.Command(newBinaryPath, "update")
+		return u.applyMSIUpdate(newBinaryPath, newVersion)
 	}
+
+	utils.Info("Launching new binary for self-update...")
+	var cmd *exec.Cmd
+	cmd = exec.Command(newBinaryPath, "update")
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
@@ -245,10 +243,74 @@ func (u *Updater) applyUpdate(newBinaryPath, newVersion string) error {
 	return nil
 }
 
-// isMSIInstallation returns true if the client was installed via MSI
-func (u *Updater) isMSIInstallation() bool {
-	val, err := registry.GetRegisteryValue(winreg.LOCAL_MACHINE, consts.RegisteryRootKey, "installed_via_msi")
-	return err == nil && val != ""
+func (u *Updater) applyMSIUpdate(msiPath, newVersion string) error {
+	logDir := filepath.Join(consts.ProgramDataDir, "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		logDir = os.TempDir()
+	}
+	msiLog := filepath.Join(logDir, fmt.Sprintf("update-%s.log", time.Now().Format("20060102-150405")))
+
+	utils.Infof("Applying MSI update using msiexec...")
+	cmd := exec.Command("msiexec",
+		"/i", msiPath,
+		"/qn", "/norestart",
+		fmt.Sprintf("/l*v %s", strconv.Quote(msiLog)),
+	)
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start msiexec: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				return fmt.Errorf("msiexec failed with exit code %d (log: %s): %v", exitErr.ExitCode(), msiLog, err)
+			}
+			return fmt.Errorf("msiexec failed (log: %s): %v", msiLog, err)
+		}
+		utils.Infof("MSI update to %s completed successfully (log: %s)", newVersion, msiLog)
+		os.Remove(msiPath)
+	case <-time.After(30 * time.Minute):
+		utils.Errorf("MSI update timed out after 30 minutes (log: %s)", msiLog)
+	}
+	return nil
+}
+
+// compareVersions compares dotted numeric version strings.
+// Returns -1 if a < b, 0 if equal (ignoring prerelease suffixes), 1 if a > b.
+func compareVersions(a, b string) int {
+	numericPart := func(v string) string {
+		if i := strings.IndexByte(v, '-'); i >= 0 {
+			return v[:i]
+		}
+		return v
+	}
+	as := strings.Split(numericPart(strings.TrimSpace(a)), ".")
+	bs := strings.Split(numericPart(strings.TrimSpace(b)), ".")
+	for i := 0; i < len(as) || i < len(bs); i++ {
+		var av, bv int
+		if i < len(as) {
+			av, _ = strconv.Atoi(as[i])
+		}
+		if i < len(bs) {
+			bv, _ = strconv.Atoi(bs[i])
+		}
+		if av != bv {
+			if av < bv {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 // IsUpdatePath returns true if the path is an update-related endpoint

@@ -7,6 +7,7 @@ import (
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -18,6 +19,22 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
+
+func sanitizeServerURL(serverURL string) string {
+	serverURL = strings.TrimSpace(serverURL)
+	serverURL = strings.ReplaceAll(serverURL, `"`, "")
+	serverURL = strings.TrimRight(serverURL, "/")
+	if serverURL != "" && !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		serverURL = "https://" + serverURL
+	}
+	return serverURL
+}
+
+func sanitizeEnrollToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.ReplaceAll(token, `"`, "")
+	return token
+}
 
 func RemoveService(preserveDeviceID bool) error {
 	// Nastavení verze na 0
@@ -90,38 +107,46 @@ func RemoveService(preserveDeviceID bool) error {
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 
-	// Odstranění dat s retry logikou
-	for i := 0; i < 3; i++ {
-		err = TakeOwnershipAndDelete(consts.TargetDir)
-		if err == nil {
-			break
+	// Only clean up the legacy default install dir when this process does not
+	// live in it. MSI-driven uninstalls run from INSTALLDIR, so MSI RemoveFiles
+	// owns those files; deleting here would race the installer.
+	if exePath, exeErr := os.Executable(); exeErr != nil ||
+		filepath.Clean(filepath.Dir(exePath)) != filepath.Clean(consts.DefaultTargetDir) {
+		for i := 0; i < 3; i++ {
+			err = TakeOwnershipAndDelete(consts.DefaultTargetDir)
+			if err == nil {
+				break
+			}
+			log.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
+			time.Sleep(time.Duration(i+1) * time.Second)
 		}
-		log.Printf("Pokus %d/3 mazání složky selhal: %v", i+1, err)
-		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 	return nil
 }
 
 func InstallService(enrollToken string, serverURL string, isMSI bool) error {
-	serverURL = strings.TrimSpace(serverURL)
-	serverURL = strings.TrimRight(serverURL, "/")
-	if serverURL != "" && !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
-		serverURL = "https://" + serverURL
+	serverURL = sanitizeServerURL(serverURL)
+	enrollToken = sanitizeEnrollToken(enrollToken)
+	if serverURL == "" || enrollToken == "" {
+		return errors.New("missing enrollment token or server URL")
 	}
-	enrollToken = strings.TrimSpace(enrollToken)
 
-	// kontrola jestli je server dostupný
+	pingOK := false
 	for i := 0; i < 3; i++ {
 		ping, err := utils.Ping(serverURL)
 		if err == nil && ping {
+			pingOK = true
 			log.Printf("Server %s je dostupný.", serverURL)
 			break
 		}
 		log.Printf("Navázání připojení k serveru selhalo. Pokus %d/3.", i+1)
 		time.Sleep(time.Duration(i+1) * time.Second)
-		if i == 2 {
+	}
+	if !pingOK {
+		if !isMSI {
 			return errors.New("Navazání připojení k serveru selhalo.")
 		}
+		utils.Error("server není dostupný, zápis zařízení provede služba po startu")
 	}
 
 	m, err := mgr.Connect()
@@ -130,8 +155,11 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 	}
 	defer m.Disconnect()
 
-	exePath := filepath.Join(consts.TargetDir, consts.TargetExeName)
-	// zjistit jestli služba není zaregistrována
+	exePath := filepath.Join(consts.DefaultTargetDir, consts.TargetExeName)
+	if isMSI {
+		exePath = filepath.Join(consts.InstallDir(), consts.TargetExeName)
+	}
+
 	s, err := m.OpenService(consts.ServiceName)
 	if err == nil {
 		// Služba existuje
@@ -142,10 +170,10 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 		}
 	}
 
-	// create folder
-	err = os.MkdirAll(consts.TargetDir, 0755)
-	if err != nil {
-		return errors.New("chyba při vytváření adresáře: " + err.Error())
+	if !isMSI {
+		if err := os.MkdirAll(consts.DefaultTargetDir, 0755); err != nil {
+			return errors.New("chyba při vytváření adresáře: " + err.Error())
+		}
 	}
 
 	// inicializovat registry
@@ -176,59 +204,16 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 		}
 	}
 
-	as := auth.NewAuthService(serverURL)
-	existingDeviceID, _, err := auth.LoadDeviceID()
-	if err != nil {
-		return errors.New("chyba při načítání DeviceID: " + err.Error())
-	}
-	privKeyPath := filepath.Join(consts.ProgramDataDir, "certs", "priv.jwk")
-	privKeyInfo, statErr := os.Stat(privKeyPath)
-	privKeyExist := statErr == nil && !privKeyInfo.IsDir()
-
-	// pokus o obnovu připojení
-	recoverFailed := false
-	if existingDeviceID != "" && privKeyExist {
-		isEnrolled, err := as.IsEnrolled(existingDeviceID)
-		if err != nil {
-			utils.Error("chyba při kontrole registrace zařízení:", err)
-			recoverFailed = true
-		} else if !isEnrolled {
-			utils.Info("zařízení není zaregistrováno na serveru, bude provedena nová registrace")
-			recoverFailed = true
-		} else {
-			if nt, rerr := as.RecoverTokens(); rerr == nil {
-				tokens := nt
-				if err := auth.SaveRefershToken(tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-					utils.Error("warning: failed to save refresh token after recover:", err)
-					recoverFailed = true
-				}
-			} else {
-				utils.Error("token recover failed:", rerr)
-				recoverFailed = true
-			}
-		}
+	// Enrollment se provádí ve službě po startu (s opakovanými pokusy), aby
+	// instalace nezávisela na dostupnosti serveru a platnosti tokenu.
+	if err := auth.SavePendingEnrollToken(enrollToken); err != nil {
+		return errors.New("chyba při ukládání enrollment tokenu: " + err.Error())
 	}
 
-	// Pokud obnova selže nebo zařízení není zaregistrováno, tak zaregistrovat znovu
-	if recoverFailed || existingDeviceID == "" || !privKeyExist {
-		enrollment, err := as.Enroll(enrollToken)
-		if err != nil {
-			return errors.New("chyba při registraci počítače: " + err.Error())
+	if !isMSI {
+		if err := CopyExecutable(); err != nil {
+			return err
 		}
-		if enrollment.DeviceID == "" {
-			return errors.New("server nevrátil device ID")
-		}
-		if err := auth.SaveDeviceID(enrollment.DeviceID); err != nil {
-			return errors.New("chyba při ukládání DeviceID: " + err.Error())
-		}
-		if err := auth.SaveRefershToken(enrollment.Tokens.RefreshToken, consts.ProgramDataDir+"/tokens", "refresh_token.txt"); err != nil {
-			return errors.New("chyba při ukládání klíče: " + err.Error())
-		}
-	}
-
-	// Kopírování souboru
-	if err := CopyExecutable(); err != nil {
-		return err
 	}
 
 	// Vytvoření služby a získání handleru
@@ -239,6 +224,7 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 			DisplayName:      consts.ServiceDisplayName,
 			StartType:        mgr.StartAutomatic,
 			ServiceStartName: "LocalSystem",
+			DelayedAutoStart: true,
 		},
 	)
 
@@ -250,18 +236,23 @@ func InstallService(enrollToken string, serverURL string, isMSI bool) error {
 
 	log.Printf("Služba %s byla úspěšně vytvořena", consts.ServiceName)
 
-	// Spuštění služby s retry logikou
+	startErr := fmt.Errorf("služba nebyla spuštěna")
 	for i := 0; i < 3; i++ {
-		err = s.Start()
-		if err == nil {
+		startErr = s.Start()
+		if startErr == nil {
 			log.Printf("Služba %s byla úspěšně spuštěna", consts.ServiceName)
 			break
 		}
-		log.Printf("Pokus %d/3 spuštění služby selhal: %v", i+1, err)
+		log.Printf("Pokus %d/3 spuštění služby selhal: %v", i+1, startErr)
 		time.Sleep(time.Duration(i+1) * time.Second)
-		if i == 2 {
-			return err
+	}
+	if startErr != nil {
+		if delErr := s.Delete(); delErr != nil {
+			log.Printf("Varování: čištění služby po selhání spuštění selhalo: %v", delErr)
+		} else {
+			log.Printf("Služba byla odstraněna po selhání spuštění.")
 		}
+		return fmt.Errorf("službu se nepodařilo spustit: %v", startErr)
 	}
 
 	return nil
@@ -329,7 +320,7 @@ func cleanupProgramData(preserveDeviceID bool) error {
 	return nil
 }
 
-func UpdateService() error {
+func UpdateService(skipBinaryCopy bool) error {
 	log.Printf("Zahajuji aktualizaci služby...")
 
 	// Připojení ke správci služeb
@@ -373,9 +364,11 @@ func UpdateService() error {
 	// Krátká pauza pro uvolnění souborů
 	time.Sleep(2 * time.Second)
 
-	// Zkopírovat nový executable
-	if err := CopyExecutable(); err != nil {
-		return fmt.Errorf("chyba při kopírování souboru: %v", err)
+	// Zkopírovat nový executable (u MSI upgradu soubory již vyměnil samotný MSI)
+	if !skipBinaryCopy {
+		if err := CopyExecutable(); err != nil {
+			return fmt.Errorf("chyba při kopírování souboru: %v", err)
+		}
 	}
 
 	// Aktualizovat verzi v registru
@@ -401,42 +394,35 @@ func UpdateService() error {
 }
 
 func CopyExecutable() error {
-	// Získat cestu k aktuálnímu spustitelnému souboru
 	sourcePath, err := filepath.Abs(os.Args[0])
 	if err != nil {
 		return fmt.Errorf("chyba při získávání cesty k souboru: %v", err)
 	}
 
-	// Pokud source == target (např. MSI již soubor nainstaloval), přeskočit kopírování
-	targetPath := filepath.Join(consts.TargetDir, consts.TargetExeName)
+	targetPath := filepath.Join(consts.DefaultTargetDir, consts.TargetExeName)
 	if filepath.Clean(sourcePath) == filepath.Clean(targetPath) {
 		log.Printf("Soubor je již na cílovém místě (%s), přeskakuji kopírování.", sourcePath)
 		return nil
 	}
 
-	// pokud cílový adresář existuje, tak smazat
-	if _, err := os.Stat(consts.TargetDir); err == nil {
-		if err := os.RemoveAll(consts.TargetDir); err != nil {
-			return fmt.Errorf("chyba při smazání adresáře: %v", err)
-		}
-	}
-
-	// Vytvořit cílový adresář
-	if err := os.MkdirAll(consts.TargetDir, 0755); err != nil {
+	if err := os.MkdirAll(consts.DefaultTargetDir, 0755); err != nil {
 		return fmt.Errorf("chyba při vytváření adresáře: %v", err)
 	}
 
-	// Sestavit cílovou cestu
-	targetPath = filepath.Join(consts.TargetDir, consts.TargetExeName)
-
-	// Zkopírovat soubor
-	input, err := os.ReadFile(sourcePath)
+	src, err := os.Open(sourcePath)
 	if err != nil {
 		return fmt.Errorf("chyba při čtení zdrojového souboru: %v", err)
 	}
+	defer src.Close()
 
-	if err := os.WriteFile(targetPath, input, 0755); err != nil {
+	dst, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
 		return fmt.Errorf("chyba při zápisu cílového souboru: %v", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("chyba při kopírování obsahu souboru: %v", err)
 	}
 
 	log.Printf("Soubor úspěšně zkopírován do: %s", targetPath)

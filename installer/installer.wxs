@@ -29,6 +29,16 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
     <MajorUpgrade DowngradeErrorMessage="A newer version of FleetCtrl Client is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- Fresh silent installs must provide configuration; interactive installs collect it
+         in the UI wizard, and upgrades/repairs keep the existing config. -->
+    <Launch Condition="Installed OR WIX_UPGRADE_DETECTED OR REMOVE~=&quot;ALL&quot; OR (ENROLL_TOKEN AND SERVER_URL) OR UILevel &gt;= 4"
+      Message="ENROLL_TOKEN and SERVER_URL properties are required for unattended installations, e.g.: msiexec /i fleetctrl-client.msi ENROLL_TOKEN=&quot;abc123&quot; SERVER_URL=&quot;https://fleet.example.com&quot;" />
+    <!-- Guard against quote characters breaking the custom action command lines. -->
+    <Launch Condition='NOT ENROLL_TOKEN &gt;&lt; """"'
+      Message="ENROLL_TOKEN must not contain quotation marks." />
+    <Launch Condition='NOT SERVER_URL &gt;&lt; """"'
+      Message="SERVER_URL must not contain quotation marks." />
+
     <!-- ══════════════════════════════════════════════════════════
          Public Properties (UPPERCASE = settable via CLI / Orca)
          ══════════════════════════════════════════════════════════ -->
@@ -48,6 +58,7 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       Action="SetInstallerLogPathExecute"
       Before="InstallInitialize"
       Sequence="execute"
+      Condition="NOT INSTALLER_LOG_PATH"
       Value="[WindowsFolder]Temp\FleetCtrlInstaller.log" />
 
     <!-- License for WixUI -->
@@ -116,11 +127,11 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       Impersonate="no"
       Return="check" />
 
-    <!-- UPDATE SERVICE: set CustomActionData -->
+    <!-- UPDATE SERVICE: set CustomActionData (binary already replaced by MSI) -->
     <SetProperty Id="UpdateServiceCA"
       Before="UpdateServiceCA"
       Sequence="execute"
-      Value="&quot;[INSTALLDIR]client.exe&quot; update --installer-log &quot;[INSTALLER_LOG_PATH]&quot;" />
+      Value="&quot;[INSTALLDIR]client.exe&quot; update --msi --installer-log &quot;[INSTALLER_LOG_PATH]&quot;" />
 
     <!-- UPDATE SERVICE: deferred+elevated execution -->
     <CustomAction Id="UpdateServiceCA"
@@ -148,6 +159,30 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       BinaryRef="Wix4UtilCA_X64"
       Execute="deferred"
       Impersonate="no"
+      Return="check" />
+
+    <!-- ROLLBACK: if a fresh install fails after the service was created, undo it -->
+    <SetProperty Id="RollbackInstallServiceCA"
+      Before="RollbackInstallServiceCA"
+      Sequence="execute"
+      Value="&quot;[INSTALLDIR]client.exe&quot; remove --installer-log &quot;[INSTALLER_LOG_PATH]&quot;" />
+    <CustomAction Id="RollbackInstallServiceCA"
+      DllEntry="WixQuietExec64"
+      BinaryRef="Wix4UtilCA_X64"
+      Execute="rollback"
+      Impersonate="no"
+      Return="ignore" />
+
+    <!-- ROLLBACK: if an upgrade fails after service restart, restart old version -->
+    <SetProperty Id="RollbackUpdateServiceCA"
+      Before="RollbackUpdateServiceCA"
+      Sequence="execute"
+      Value="&quot;[INSTALLDIR]client.exe&quot; update --msi --installer-log &quot;[INSTALLER_LOG_PATH]&quot;" />
+    <CustomAction Id="RollbackUpdateServiceCA"
+      DllEntry="WixQuietExec64"
+      BinaryRef="Wix4UtilCA_X64"
+      Execute="rollback"
+      Impersonate="no"
       Return="ignore" />
 
     <!-- Schedule custom actions in the execute sequence -->
@@ -156,8 +191,16 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       <Custom Action="InstallServiceCA" After="InstallFiles"
         Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
 
+      <!-- Rollback for fresh install: undo service registration if install fails -->
+      <Custom Action="RollbackInstallServiceCA" Before="InstallServiceCA"
+        Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
+
       <!-- Upgrade: only if older version detected -->
       <Custom Action="UpdateServiceCA" After="InstallFiles"
+        Condition="WIX_UPGRADE_DETECTED AND NOT Installed" />
+
+      <!-- Rollback for upgrade: restart previous version if upgrade fails -->
+      <Custom Action="RollbackUpdateServiceCA" Before="UpdateServiceCA"
         Condition="WIX_UPGRADE_DETECTED AND NOT Installed" />
 
       <!-- Uninstall: only if removing and not part of an upgrade -->
@@ -189,7 +232,6 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
           Transparent="yes" NoPrefix="yes" Text="Enter enrollment token and server URL." />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
 
-        <!-- Server URL input -->
         <Control Id="ServerURLLabel" Type="Text" X="20" Y="65" Width="330" Height="13"
           NoPrefix="yes" Text="Server URL (e.g. https://fleet.example.com/api):" />
         <Control Id="ServerURLEdit" Type="Edit" X="20" Y="80" Width="330" Height="18"
@@ -208,12 +250,27 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
         </Control>
         <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes"
           Text="&amp;Next">
+          <!-- Validate input: block navigation until both fields are non-empty -->
+          <Publish Event="SpawnDialog" Value="FleetCtrlConfigErrorDlg"
+            Condition="NOT ENROLL_TOKEN OR NOT SERVER_URL" />
           <!-- When Next is clicked, go to the VerifyReadyDlg -->
-          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+          <Publish Event="NewDialog" Value="VerifyReadyDlg"
+            Condition="ENROLL_TOKEN AND SERVER_URL" />
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes"
           Text="Cancel">
           <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <!-- Validation error dialog shown when token/URL are missing -->
+      <Dialog Id="FleetCtrlConfigErrorDlg" Width="300" Height="110"
+        Title="FleetCtrl Client" NoMinimize="yes">
+        <Control Id="Text" Type="Text" X="20" Y="20" Width="260" Height="40" NoPrefix="yes"
+          Text="Please enter both the enrollment token and the server URL before continuing." />
+        <Control Id="OK" Type="PushButton" X="122" Y="80" Width="56" Height="17" Default="yes"
+          Cancel="yes" Text="OK">
+          <Publish Event="EndDialog" Value="Return" />
         </Control>
       </Dialog>
 
