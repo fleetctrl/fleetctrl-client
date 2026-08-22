@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
 
-export type IconName = 'grid' | 'apps' | 'sync' | 'check' | 'warning' | 'server' | 'clock' | 'close' | 'sun' | 'moon'
+export type IconName = 'grid' | 'apps' | 'sync' | 'check' | 'warning' | 'server' | 'clock' | 'close' | 'sun' | 'moon' | 'hub'
 
 const paths: Record<IconName, ReactNode> = {
   grid: <><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></>,
@@ -15,6 +15,16 @@ const paths: Record<IconName, ReactNode> = {
   close: <path d="m6 6 12 12M18 6 6 18" />,
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></>,
   moon: <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />,
+  hub: (
+    <>
+      <circle cx="12" cy="12" r="2" />
+      <path d="M12 10V6.5M14 12h3.5M12 14v3.5M10 12H6.5" />
+      <circle cx="12" cy="4.5" r="1.5" />
+      <circle cx="19.5" cy="12" r="1.5" />
+      <circle cx="12" cy="19.5" r="1.5" />
+      <circle cx="4.5" cy="12" r="1.5" />
+    </>
+  ),
 }
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {
