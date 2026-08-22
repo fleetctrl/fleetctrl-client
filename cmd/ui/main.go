@@ -41,6 +41,21 @@ func main() {
 			DisableWindowIcon:    false,
 			Theme:                windows.SystemDefault,
 			BackdropType:         windows.Acrylic,
+			CustomTheme: &windows.ThemeSettings{
+				// oklch(0.163 0.012 262) / oklch(0.978 0.003 258) z --background ve styles.css
+				DarkModeTitleBar:           windows.RGB(11, 14, 19),
+				DarkModeTitleBarInactive:   windows.RGB(11, 14, 19),
+				DarkModeTitleText:          windows.RGB(156, 163, 175),
+				DarkModeTitleTextInactive:  windows.RGB(156, 163, 175),
+				DarkModeBorder:             windows.RGB(11, 14, 19),
+				DarkModeBorderInactive:     windows.RGB(11, 14, 19),
+				LightModeTitleBar:          windows.RGB(246, 248, 250),
+				LightModeTitleBarInactive:  windows.RGB(246, 248, 250),
+				LightModeTitleText:         windows.RGB(107, 114, 128),
+				LightModeTitleTextInactive: windows.RGB(107, 114, 128),
+				LightModeBorder:            windows.RGB(246, 248, 250),
+				LightModeBorderInactive:    windows.RGB(246, 248, 250),
+			},
 			Messages: &windows.Messages{
 				InstallationRequired: "Pro spuštění FleetCtrl je potřeba WebView2 Runtime. Po potvrzení se stáhne a nainstaluje.",
 				UpdateRequired:       "WebView2 Runtime je potřeba aktualizovat. Po potvrzení se aktualizace stáhne a nainstaluje.",
