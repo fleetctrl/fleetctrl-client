@@ -217,6 +217,7 @@ func (s *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 			utils.Errorf("UI IPC server stopped: %v", err)
 		}
 	}()
+	go ms.StartHeartbeatLoop(serviceCtx)
 	go ms.StartComputerSyncLoop(serviceCtx, coordinator)
 	go ms.StartRustDeskServerTasks()
 	go ms.StartApplicationSyncLoop(serviceCtx, coordinator)
@@ -525,6 +526,7 @@ func main() {
 				utils.Errorf("UI IPC server stopped: %v", err)
 			}
 		}()
+		go ms.StartHeartbeatLoop(serviceCtx)
 		go ms.StartComputerSyncLoop(serviceCtx, coordinator)
 		go ms.StartRustDeskServerTasks()
 		go ms.StartApplicationSyncLoop(serviceCtx, coordinator)

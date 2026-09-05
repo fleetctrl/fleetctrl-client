@@ -42,16 +42,20 @@ func (ms *MainService) SyncComputerOnce(ctx context.Context) (ComputerSyncResult
 	if rustdeskErr != nil {
 		utils.Errorf("Failed to read RustDesk ID: %v", rustdeskErr)
 	}
+	hardware, hardwareErr := utils.GetComputerHardware(ctx)
+	if hardwareErr != nil {
+		return result, fmt.Errorf("read hardware inventory: %w", hardwareErr)
+	}
 	computer := models.Computer{
 		Name: computerName, RustdeskID: rustdeskID, IP: computerIP, OS: osName,
 		OSVersion: osVersion, LoginUser: loginUser, IntuneID: intuneID,
-		LastConnection: time.Now().UTC().Format(time.RFC3339),
+		Hardware: hardware,
 	}
 	body, err := json.Marshal(computer)
 	if err != nil {
 		return result, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, ms.serverURL+"/computer/rustdesk-sync", bytesReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, ms.serverURL+"/computer/hardware-sync", bytesReader(body))
 	if err != nil {
 		return result, err
 	}
@@ -389,7 +393,7 @@ func (ms *MainService) StartComputerSyncLoop(ctx context.Context, coordinator *s
 		}
 	}
 	trigger(database.TriggerStartup)
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
 		select {
