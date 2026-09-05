@@ -89,12 +89,22 @@ type TaskResponse struct {
 }
 
 type Computer struct {
-	Name           string `json:"name"`
-	RustdeskID     string `json:"rustdesk_id"`
-	IP             string `json:"ip"`
-	OS             string `json:"os"`
-	OSVersion      string `json:"os_version"`
-	LoginUser      string `json:"login_user"`
-	IntuneID       string `json:"intune_id"`
-	LastConnection string `json:"last_connection"`
+	Name       string    `json:"name"`
+	RustdeskID string    `json:"rustdesk_id"`
+	IP         string    `json:"ip"`
+	OS         string    `json:"os"`
+	OSVersion  string    `json:"os_version"`
+	LoginUser  string    `json:"login_user"`
+	IntuneID   string    `json:"intune_id"`
+	Hardware   *Hardware `json:"hardware,omitempty"`
+}
+
+type Hardware struct {
+	CPUName               string `json:"cpu_name"`
+	CPUCores              uint32 `json:"cpu_cores"`
+	CPULogicalProcessors  uint32 `json:"cpu_logical_processors"`
+	RAMBytes              uint64 `json:"ram_bytes"`
+	SystemDrive           string `json:"system_drive"`
+	SystemDriveTotalBytes uint64 `json:"system_drive_total_bytes"`
+	SystemDriveFreeBytes  uint64 `json:"system_drive_free_bytes"`
 }
