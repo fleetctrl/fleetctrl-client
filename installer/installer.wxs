@@ -127,6 +127,20 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       Impersonate="no"
       Return="check" />
 
+    <!-- CLOSE UI: stop the running Wails UI before MSI file replacement.
+         If fleetctrl-ui.exe is open, Windows Installer cannot overwrite/remove it. -->
+    <SetProperty Id="CloseUICa"
+      Before="CloseUICa"
+      Sequence="execute"
+      Value="cmd.exe /C &quot;taskkill /IM fleetctrl-ui.exe /F /T &gt;NUL 2&gt;&amp;1 &amp; exit /B 0&quot;" />
+
+    <CustomAction Id="CloseUICa"
+      DllEntry="WixQuietExec64"
+      BinaryRef="Wix4UtilCA_X64"
+      Execute="deferred"
+      Impersonate="no"
+      Return="ignore" />
+
     <!-- UPDATE SERVICE: set CustomActionData (binary already replaced by MSI) -->
     <SetProperty Id="UpdateServiceCA"
       Before="UpdateServiceCA"
@@ -194,6 +208,10 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       <!-- Rollback for fresh install: undo service registration if install fails -->
       <Custom Action="RollbackInstallServiceCA" Before="InstallServiceCA"
         Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
+
+      <!-- Close the UI before MSI tries to replace/remove fleetctrl-ui.exe. -->
+      <Custom Action="CloseUICa" After="InstallInitialize"
+        Condition="WIX_UPGRADE_DETECTED OR REMOVE~=&quot;ALL&quot; OR Installed" />
 
       <!-- Upgrade: only if older version detected -->
       <Custom Action="UpdateServiceCA" After="InstallFiles"
