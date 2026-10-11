@@ -3,6 +3,8 @@ package updater
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
 	"KiskaLE/RustDesk-ID/internal/utils"
+	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -152,7 +154,11 @@ func (u *Updater) downloadUpdate(info *UpdateInfo) (string, error) {
 		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	installerExt := u.getInstallerExtension(info, resp.Header.Get("Content-Type"))
+	// Sniff the file signature: the served Content-Type comes from whatever the
+	// uploading browser reported and cannot be trusted to identify MSI packages.
+	body := bufio.NewReader(resp.Body)
+	signature, _ := body.Peek(len(msiSignature))
+	installerExt := getInstallerExtension(signature, info, resp.Header.Get("Content-Type"))
 
 	// Create temp file with the final extension up-front. On Windows, renaming an
 	// open file handle can fail with a sharing violation, which breaks MSI updates.
@@ -164,7 +170,7 @@ func (u *Updater) downloadUpdate(info *UpdateInfo) (string, error) {
 	defer tmpFile.Close()
 
 	// Download the binary
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+	if _, err := io.Copy(tmpFile, body); err != nil {
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to download: %w", err)
 	}
@@ -182,7 +188,17 @@ func (u *Updater) downloadUpdate(info *UpdateInfo) (string, error) {
 	return tmpPath, nil
 }
 
-func (u *Updater) getInstallerExtension(info *UpdateInfo, contentType string) string {
+// msiSignature is the OLE compound file header that every MSI package starts with.
+var msiSignature = []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+
+func getInstallerExtension(signature []byte, info *UpdateInfo, contentType string) string {
+	if bytes.HasPrefix(signature, msiSignature) {
+		return ".msi"
+	}
+	if bytes.HasPrefix(signature, []byte("MZ")) {
+		return ".exe"
+	}
+
 	contentType = strings.ToLower(strings.TrimSpace(contentType))
 	updateID := strings.ToLower(strings.TrimSpace(info.ID))
 
@@ -251,13 +267,11 @@ func (u *Updater) applyMSIUpdate(msiPath, newVersion string) error {
 	msiLog := filepath.Join(logDir, fmt.Sprintf("update-%s.log", time.Now().Format("20060102-150405")))
 
 	utils.Infof("Applying MSI update using msiexec...")
-	cmd := exec.Command("msiexec",
-		"/i", msiPath,
-		"/qn", "/norestart",
-		fmt.Sprintf("/l*v %s", strconv.Quote(msiLog)),
-	)
-
+	// msiexec parses its command line itself and does not understand Go's
+	// per-argument escaping (e.g. `"/l*v \"C:\\...\""`), so pass it verbatim.
+	cmd := exec.Command("msiexec")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine:       msiexecCmdLine(msiPath, msiLog),
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
 
@@ -282,6 +296,10 @@ func (u *Updater) applyMSIUpdate(msiPath, newVersion string) error {
 		utils.Errorf("MSI update timed out after 30 minutes (log: %s)", msiLog)
 	}
 	return nil
+}
+
+func msiexecCmdLine(msiPath, logPath string) string {
+	return fmt.Sprintf(`msiexec /i "%s" /qn /norestart /l*v "%s"`, msiPath, logPath)
 }
 
 // compareVersions compares dotted numeric version strings.
