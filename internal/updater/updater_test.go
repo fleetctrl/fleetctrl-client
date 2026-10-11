@@ -25,3 +25,11 @@ func TestGetInstallerExtension(t *testing.T) {
 		})
 	}
 }
+
+func TestMsiexecCmdLine(t *testing.T) {
+	got := msiexecCmdLine(`C:\Windows\Temp\fleetctrl-update-1.msi`, `C:\ProgramData\fleetctrl\logs\update-1.log`)
+	want := `msiexec /i "C:\Windows\Temp\fleetctrl-update-1.msi" /qn /norestart /l*v "C:\ProgramData\fleetctrl\logs\update-1.log"`
+	if got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}

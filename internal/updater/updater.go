@@ -267,13 +267,11 @@ func (u *Updater) applyMSIUpdate(msiPath, newVersion string) error {
 	msiLog := filepath.Join(logDir, fmt.Sprintf("update-%s.log", time.Now().Format("20060102-150405")))
 
 	utils.Infof("Applying MSI update using msiexec...")
-	cmd := exec.Command("msiexec",
-		"/i", msiPath,
-		"/qn", "/norestart",
-		fmt.Sprintf("/l*v %s", strconv.Quote(msiLog)),
-	)
-
+	// msiexec parses its command line itself and does not understand Go's
+	// per-argument escaping (e.g. `"/l*v \"C:\\...\""`), so pass it verbatim.
+	cmd := exec.Command("msiexec")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine:       msiexecCmdLine(msiPath, msiLog),
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
 
@@ -298,6 +296,10 @@ func (u *Updater) applyMSIUpdate(msiPath, newVersion string) error {
 		utils.Errorf("MSI update timed out after 30 minutes (log: %s)", msiLog)
 	}
 	return nil
+}
+
+func msiexecCmdLine(msiPath, logPath string) string {
+	return fmt.Sprintf(`msiexec /i "%s" /qn /norestart /l*v "%s"`, msiPath, logPath)
 }
 
 // compareVersions compares dotted numeric version strings.
