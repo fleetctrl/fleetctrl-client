@@ -135,7 +135,8 @@ func newestAssignments(assigned []models.AssignedApp) ([]database.ManagedAppStat
 
 // refreshAssignedApplicationStates detects every assigned release and reports the result to the hub.
 // Releases in failed already had an ERROR reported by an operation in this cycle; their local state is
-// still refreshed, but the hub report is skipped so that the failure is not overwritten by plain detection.
+// still refreshed, but the hub report is skipped so that the failure and its message are not overwritten by
+// detection, not even by a detection error.
 func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, assigned []models.AssignedApp, failed map[string]bool) (ApplicationSyncResult, error) {
 	var result ApplicationSyncResult
 	repo := database.DefaultRepository()
@@ -162,7 +163,10 @@ func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, ass
 			result.Errors++
 			message := summarizeError(err)
 			_ = repo.UpdateDetectionState(ctx, state.ReleaseID, database.DetectionUnknown, checkedAt, message)
-			ms.reportReleaseInstallState(state.ReleaseID, apps.ReleaseInstallStateError, nil, "detection failed: "+message)
+			// Keep the operation's own error on the hub rather than replacing it with this secondary one.
+			if !failed[state.ReleaseID] {
+				ms.reportReleaseInstallState(state.ReleaseID, apps.ReleaseInstallStateError, nil, "detection failed: "+message)
+			}
 			continue
 		}
 		status := database.DetectionNotInstalled
