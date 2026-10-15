@@ -299,24 +299,30 @@ func (ms *MainService) installRelease(ctx context.Context, app models.AssignedAp
 	return nil
 }
 
-// performReinstall handles a reinstall requested from the hub: it removes the app (when present),
-// installs it again and acknowledges the request so the hub does not ask for it again.
+// performReinstall handles a reinstall requested from the hub: it removes the app, installs it again
+// and acknowledges the request so the hub does not ask for it again.
+// The uninstall is attempted even when detection reports the app as absent, because a failed or
+// partial installation usually fails detection while still leaving remnants behind.
 // Failure backoff is bypassed because the request is an explicit administrator action.
 func (ms *MainService) performReinstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease, installed bool, requestedAt int64) {
 	repo := database.DefaultRepository()
 	_ = database.ResetAppFailures(release.ID)
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "reinstall_requested", Source: "server", CreatedAt: time.Now().UTC()})
-	if installed {
-		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationUninstalling, "")
-		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_started", Source: "reinstall", CreatedAt: time.Now().UTC()})
-		if err := ms.apps.Uninstall(ctx, release, ms.serverURL); err != nil {
-			// A broken installation often has a broken uninstall too; the fresh install still gets its chance.
-			message := summarizeError(err)
+	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationUninstalling, "")
+	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_started", Source: "reinstall", CreatedAt: time.Now().UTC()})
+	if err := ms.apps.Uninstall(ctx, release, ms.serverURL); err != nil {
+		// A broken installation often has a broken uninstall too, and an app that was never installed
+		// cannot be uninstalled at all; either way the fresh install still gets its chance.
+		message := summarizeError(err)
+		if installed {
 			utils.Errorf("Uninstall before reinstall of release %s failed, continuing with install: %v", release.ID, err)
-			_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_failed", Source: "reinstall", Message: message, CreatedAt: time.Now().UTC()})
 		} else {
-			_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_succeeded", Source: "reinstall", CreatedAt: time.Now().UTC()})
+			message = "app was not detected before reinstall: " + message
+			utils.Infof("Cleanup uninstall before reinstall of release %s failed (app was not detected), continuing with install: %v", release.ID, err)
 		}
+		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_failed", Source: "reinstall", Message: message, CreatedAt: time.Now().UTC()})
+	} else {
+		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_succeeded", Source: "reinstall", CreatedAt: time.Now().UTC()})
 	}
 	status := apps.ReleaseInstallStateInstalled
 	installedAt := nowUnixMilliPtr()
