@@ -251,7 +251,7 @@ func (ms *MainService) ReconcileAssignedApplications(ctx context.Context) (Appli
 			failed[release.ID] = ms.performInstall(ctx, app, release)
 
 		case release.Action == "install" && installed && app.AutoUpdate:
-			ms.performUpdate(ctx, app, release)
+			failed[release.ID] = ms.performUpdate(ctx, app, release)
 
 		case release.Action == "uninstall" && installed:
 			failed[release.ID] = ms.performUninstall(ctx, app, release)
@@ -383,7 +383,9 @@ func (ms *MainService) performUninstall(ctx context.Context, app models.Assigned
 	return false
 }
 
-func (ms *MainService) performUpdate(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) {
+// performUpdate upgrades an installed release when an update is due. It returns true when the update
+// failed and an ERROR state was reported to the hub; the previous version usually stays installed.
+func (ms *MainService) performUpdate(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) bool {
 	repo := database.DefaultRepository()
 	now := time.Now().UTC()
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationUpgrading, "")
@@ -395,16 +397,18 @@ func (ms *MainService) performUpdate(ctx context.Context, app models.AssignedApp
 		}
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
 		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "update_failed", Source: "reconcile", Message: message, CreatedAt: time.Now().UTC()})
-		return
+		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil, "update failed: "+message)
+		return true
 	}
 	if !result.Attempted {
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationIdle, "")
-		return
+		return false
 	}
 
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "update_started", Source: "reconcile", CreatedAt: now})
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationIdle, "")
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "update_succeeded", Source: "reconcile", CreatedAt: time.Now().UTC()})
+	return false
 }
 
 func summarizeError(err error) string {
