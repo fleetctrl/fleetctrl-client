@@ -72,6 +72,8 @@ var migrations = []string{
 			FROM app_events
 		) WHERE rn > 100
 	);`,
+	`ALTER TABLE managed_app_states ADD COLUMN failed_operation TEXT;
+	ALTER TABLE managed_app_states ADD COLUMN operation_error TEXT;`,
 }
 
 func (r *SQLiteRepository) migrate(ctx context.Context) error {

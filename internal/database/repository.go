@@ -136,6 +136,9 @@ func (r *SQLiteRepository) UpsertAssignedApps(ctx context.Context, apps []Manage
 				return err
 			}
 		} else if oldAssign != app.AssignType || oldAction != app.DesiredAction {
+			if _, err := tx.ExecContext(ctx, "UPDATE managed_app_states SET failed_operation=NULL, operation_error=NULL WHERE release_id=?", app.ReleaseID); err != nil {
+				return err
+			}
 			if err := insertEvent(ctx, tx, AppEvent{ReleaseID: app.ReleaseID, AppID: app.AppID, EventType: "assignment_changed", Source: "server", CreatedAt: observedAt}); err != nil {
 				return err
 			}
@@ -158,7 +161,8 @@ func (r *SQLiteRepository) UpsertAssignedApps(ctx context.Context, apps []Manage
 	}
 	rows.Close()
 	for _, item := range removed {
-		if _, err := tx.ExecContext(ctx, "UPDATE managed_app_states SET assignment_removed_at=?, updated_at=? WHERE release_id=?", observedAt, observedAt, item[0]); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE managed_app_states SET assignment_removed_at=?, failed_operation=NULL,
+			operation_error=NULL, updated_at=? WHERE release_id=?`, observedAt, observedAt, item[0]); err != nil {
 			return err
 		}
 		if err := insertEvent(ctx, tx, AppEvent{ReleaseID: item[0], AppID: item[1], EventType: "assignment_removed", Source: "server", CreatedAt: observedAt}); err != nil {
@@ -207,6 +211,30 @@ func (r *SQLiteRepository) UpdateOperationState(ctx context.Context, releaseID s
 	_, err := r.db.ExecContext(ctx, `UPDATE managed_app_states SET operation_status=?, last_error=?, updated_at=? WHERE release_id=?`,
 		status, nullableString(operationError), now, releaseID)
 	return err
+}
+
+func (r *SQLiteRepository) RecordOperationFailure(ctx context.Context, releaseID string, failure OperationFailure) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE managed_app_states SET failed_operation=?, operation_error=?, updated_at=? WHERE release_id=?`,
+		failure.Operation, failure.Message, time.Now().UTC(), releaseID)
+	return err
+}
+
+func (r *SQLiteRepository) ClearOperationFailure(ctx context.Context, releaseID string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE managed_app_states SET failed_operation=NULL, operation_error=NULL WHERE release_id=?`, releaseID)
+	return err
+}
+
+// GetOperationFailure returns the stored failure of a release; ok is false when there is none.
+func (r *SQLiteRepository) GetOperationFailure(ctx context.Context, releaseID string) (failure OperationFailure, ok bool, err error) {
+	var operation, message sql.NullString
+	err = r.db.QueryRowContext(ctx, `SELECT failed_operation, operation_error FROM managed_app_states WHERE release_id=?`, releaseID).Scan(&operation, &message)
+	if err == sql.ErrNoRows || (err == nil && !operation.Valid) {
+		return OperationFailure{}, false, nil
+	}
+	if err != nil {
+		return OperationFailure{}, false, err
+	}
+	return OperationFailure{Operation: FailedOperation(operation.String), Message: message.String}, true, nil
 }
 
 func (r *SQLiteRepository) MarkInstalledByClient(ctx context.Context, releaseID string, installedAt time.Time) error {

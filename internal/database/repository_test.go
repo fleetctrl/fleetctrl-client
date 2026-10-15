@@ -81,3 +81,67 @@ func TestRemovedAssignmentIsSoftDeletedAndRunIsInterrupted(t *testing.T) {
 	require.Equal(t, SyncInterrupted, got.Status)
 	require.NotNil(t, got.CompletedAt)
 }
+
+func TestOperationFailureIsKeptUntilClearedOrAssignmentChanges(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	app := ManagedAppState{
+		ReleaseID: "release-1", AppID: "app-1", DisplayName: "Editor",
+		InstallerType: "winget", AssignType: "include", DesiredAction: "install",
+	}
+	require.NoError(t, repo.UpsertAssignedApps(ctx, []ManagedAppState{app}, now))
+
+	_, ok, err := repo.GetOperationFailure(ctx, app.ReleaseID)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	failure := OperationFailure{Operation: FailedInstall, Message: "install failed: exit code 1603"}
+	require.NoError(t, repo.RecordOperationFailure(ctx, app.ReleaseID, failure))
+	// Detection and an unchanged assignment must not wipe the failure.
+	require.NoError(t, repo.UpdateDetectionState(ctx, app.ReleaseID, DetectionNotInstalled, now, ""))
+	require.NoError(t, repo.UpsertAssignedApps(ctx, []ManagedAppState{app}, now.Add(time.Minute)))
+	stored, ok, err := repo.GetOperationFailure(ctx, app.ReleaseID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, failure, stored)
+
+	require.NoError(t, repo.ClearOperationFailure(ctx, app.ReleaseID))
+	_, ok, err = repo.GetOperationFailure(ctx, app.ReleaseID)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	require.NoError(t, repo.RecordOperationFailure(ctx, app.ReleaseID, failure))
+	app.DesiredAction = "uninstall"
+	require.NoError(t, repo.UpsertAssignedApps(ctx, []ManagedAppState{app}, now.Add(2*time.Minute)))
+	_, ok, err = repo.GetOperationFailure(ctx, app.ReleaseID)
+	require.NoError(t, err)
+	require.False(t, ok, "a changed assignment clears the failure")
+
+	require.NoError(t, repo.RecordOperationFailure(ctx, app.ReleaseID, failure))
+	require.NoError(t, repo.UpsertAssignedApps(ctx, nil, now.Add(3*time.Minute)))
+	_, ok, err = repo.GetOperationFailure(ctx, app.ReleaseID)
+	require.NoError(t, err)
+	require.False(t, ok, "a removed assignment clears the failure")
+}
+
+func TestOperationFailureResolvedByDetection(t *testing.T) {
+	cases := []struct {
+		operation FailedOperation
+		status    DetectionStatus
+		resolved  bool
+	}{
+		{FailedInstall, DetectionInstalled, true},
+		{FailedInstall, DetectionNotInstalled, false},
+		{FailedInstall, DetectionUnknown, false},
+		{FailedUninstall, DetectionNotInstalled, true},
+		{FailedUninstall, DetectionInstalled, false},
+		{FailedUpdate, DetectionInstalled, false},
+		{FailedUpdate, DetectionNotInstalled, true},
+		{FailedUpdate, DetectionUnknown, false},
+	}
+	for _, c := range cases {
+		failure := OperationFailure{Operation: c.operation}
+		require.Equal(t, c.resolved, failure.ResolvedBy(c.status), "%s with %s", c.operation, c.status)
+	}
+}

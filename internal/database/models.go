@@ -10,6 +10,7 @@ type OperationStatus string
 type SyncKind string
 type SyncTrigger string
 type SyncStatus string
+type FailedOperation string
 
 const (
 	DetectionUnknown      DetectionStatus = "unknown"
@@ -37,7 +38,32 @@ const (
 	SyncPartial     SyncStatus = "partial"
 	SyncError       SyncStatus = "error"
 	SyncInterrupted SyncStatus = "interrupted"
+
+	FailedInstall   FailedOperation = "install"
+	FailedUninstall FailedOperation = "uninstall"
+	FailedUpdate    FailedOperation = "update"
 )
+
+// OperationFailure is the last failed install, uninstall or update of a release. It is kept until an
+// operation succeeds, the assignment changes, or detection shows the problem no longer applies, so the
+// hub keeps seeing the error between retries instead of only in the cycle in which it happened.
+type OperationFailure struct {
+	Operation FailedOperation
+	Message   string
+}
+
+// ResolvedBy reports whether detection shows the failure no longer applies: a failed install is resolved
+// once the app is installed (for example manually), and a failed uninstall or update once it is gone.
+func (f OperationFailure) ResolvedBy(status DetectionStatus) bool {
+	switch f.Operation {
+	case FailedInstall:
+		return status == DetectionInstalled
+	case FailedUninstall, FailedUpdate:
+		return status == DetectionNotInstalled
+	default:
+		return true
+	}
+}
 
 type ManagedAppState struct {
 	ReleaseID            string          `json:"release_id"`
