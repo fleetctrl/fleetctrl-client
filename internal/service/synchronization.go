@@ -133,7 +133,10 @@ func newestAssignments(assigned []models.AssignedApp) ([]database.ManagedAppStat
 	return states, releases
 }
 
-func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, assigned []models.AssignedApp) (ApplicationSyncResult, error) {
+// refreshAssignedApplicationStates detects every assigned release and reports the result to the hub.
+// Releases in failed already had an ERROR reported by an operation in this cycle; their local state is
+// still refreshed, but the hub report is skipped so that the failure is not overwritten by plain detection.
+func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, assigned []models.AssignedApp, failed map[string]bool) (ApplicationSyncResult, error) {
 	var result ApplicationSyncResult
 	repo := database.DefaultRepository()
 
@@ -174,6 +177,9 @@ func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, ass
 			result.Errors++
 			continue
 		}
+		if failed[state.ReleaseID] {
+			continue
+		}
 		ms.reportReleaseInstallState(state.ReleaseID, reportStatus, nil)
 	}
 
@@ -193,7 +199,7 @@ func (ms *MainService) RefreshAssignedApplicationStates(ctx context.Context) (Ap
 		return ApplicationSyncResult{}, err
 	}
 
-	return ms.refreshAssignedApplicationStates(ctx, assigned)
+	return ms.refreshAssignedApplicationStates(ctx, assigned, nil)
 }
 
 func (ms *MainService) ReconcileAssignedApplications(ctx context.Context) (ApplicationSyncResult, error) {
@@ -202,13 +208,15 @@ func (ms *MainService) ReconcileAssignedApplications(ctx context.Context) (Appli
 		return ApplicationSyncResult{}, err
 	}
 
-	statusResult, statusErr := ms.refreshAssignedApplicationStates(ctx, assigned)
+	statusResult, statusErr := ms.refreshAssignedApplicationStates(ctx, assigned, nil)
 
 	repo := database.DefaultRepository()
 	if repo == nil {
 		return statusResult, fmt.Errorf("database is not initialized")
 	}
 
+	// Releases whose operation failed in this cycle; the final refresh must not overwrite their ERROR report.
+	failed := make(map[string]bool)
 	for _, app := range assigned {
 		if err := ctx.Err(); err != nil {
 			return statusResult, err
@@ -229,23 +237,23 @@ func (ms *MainService) ReconcileAssignedApplications(ctx context.Context) (Appli
 		}
 
 		if release.Action == "install" && app.ReinstallRequestedAt != nil {
-			ms.performReinstall(ctx, app, release, installed, *app.ReinstallRequestedAt)
+			failed[release.ID] = ms.performReinstall(ctx, app, release, installed, *app.ReinstallRequestedAt)
 			continue
 		}
 
 		switch {
 		case release.Action == "install" && !installed:
-			ms.performInstall(ctx, app, release)
+			failed[release.ID] = ms.performInstall(ctx, app, release)
 
 		case release.Action == "install" && installed && app.AutoUpdate:
 			ms.performUpdate(ctx, app, release)
 
 		case release.Action == "uninstall" && installed:
-			ms.performUninstall(ctx, app, release)
+			failed[release.ID] = ms.performUninstall(ctx, app, release)
 		}
 	}
 
-	final, finalErr := ms.refreshAssignedApplicationStates(ctx, assigned)
+	final, finalErr := ms.refreshAssignedApplicationStates(ctx, assigned, failed)
 	if statusErr != nil || finalErr != nil {
 		final.Errors += statusResult.Errors
 		return final, fmt.Errorf("application reconciliation completed with errors")
@@ -254,18 +262,20 @@ func (ms *MainService) ReconcileAssignedApplications(ctx context.Context) (Appli
 	return final, nil
 }
 
-func (ms *MainService) performInstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) {
+// performInstall installs a missing release. It returns true when it reported an ERROR state to the hub.
+func (ms *MainService) performInstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) bool {
 	allowed, err := database.ShouldAttemptApp(release.ID)
 
 	if err != nil || !allowed {
-		return
+		return false
 	}
 
 	if err := ms.installRelease(ctx, app, release, "reconcile"); err != nil {
 		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil)
-		return
+		return true
 	}
 	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateInstalled, nowUnixMilliPtr())
+	return false
 }
 
 // installRelease runs the installation and records it locally. The caller reports the final state to the hub.
@@ -304,7 +314,8 @@ func (ms *MainService) installRelease(ctx context.Context, app models.AssignedAp
 // The uninstall is attempted even when detection reports the app as absent, because a failed or
 // partial installation usually fails detection while still leaving remnants behind.
 // Failure backoff is bypassed because the request is an explicit administrator action.
-func (ms *MainService) performReinstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease, installed bool, requestedAt int64) {
+// It returns true when the reinstall failed and an ERROR state was reported to the hub.
+func (ms *MainService) performReinstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease, installed bool, requestedAt int64) bool {
 	repo := database.DefaultRepository()
 	_ = database.ResetAppFailures(release.ID)
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "reinstall_requested", Source: "server", CreatedAt: time.Now().UTC()})
@@ -334,13 +345,15 @@ func (ms *MainService) performReinstall(ctx context.Context, app models.Assigned
 	if err := apps.ReportReinstallResult(ms.serverURL, release.ID, status, installedAt, &lastSeenAt, requestedAt); err != nil {
 		utils.Errorf("Failed to acknowledge reinstall of release %s: %v", release.ID, err)
 	}
+	return status == apps.ReleaseInstallStateError
 }
 
-func (ms *MainService) performUninstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) {
+// performUninstall removes a release. It returns true when it reported an ERROR state to the hub.
+func (ms *MainService) performUninstall(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) bool {
 	repo := database.DefaultRepository()
 	allowed, err := database.ShouldAttemptApp(release.ID)
 	if err != nil || !allowed {
-		return
+		return false
 	}
 	now := time.Now().UTC()
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationUninstalling, "")
@@ -351,12 +364,13 @@ func (ms *MainService) performUninstall(ctx context.Context, app models.Assigned
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
 		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_failed", Source: "reconcile", Message: message, CreatedAt: time.Now().UTC()})
 		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil)
-		return
+		return true
 	}
 	_ = database.ResetAppFailures(release.ID)
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationIdle, "")
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_succeeded", Source: "reconcile", CreatedAt: time.Now().UTC()})
 	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateUninstalled, nil)
+	return false
 }
 
 func (ms *MainService) performUpdate(ctx context.Context, app models.AssignedApp, release models.AssignedRelease) {
