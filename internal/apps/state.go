@@ -21,6 +21,8 @@ type releaseInstallStatePayload struct {
 	Status      ReleaseInstallStateStatus `json:"status"`
 	InstalledAt *int64                    `json:"installed_at,omitempty"`
 	LastSeenAt  *int64                    `json:"last_seen_at,omitempty"`
+	// ReinstallRequestedAt acknowledges the reinstall request with this timestamp so the hub can clear it.
+	ReinstallRequestedAt *int64 `json:"reinstall_requested_at,omitempty"`
 }
 
 func (s ReleaseInstallStateStatus) IsValid() bool {
@@ -37,6 +39,25 @@ func (s ReleaseInstallStateStatus) IsValid() bool {
 }
 
 func ReportReleaseInstallState(serverURL, releaseID string, status ReleaseInstallStateStatus, installedAt, lastSeenAt *int64) error {
+	return reportReleaseInstallState(serverURL, releaseID, releaseInstallStatePayload{
+		Status:      status,
+		InstalledAt: installedAt,
+		LastSeenAt:  lastSeenAt,
+	})
+}
+
+// ReportReinstallResult reports the outcome of a server-requested reinstall and acknowledges the request.
+func ReportReinstallResult(serverURL, releaseID string, status ReleaseInstallStateStatus, installedAt, lastSeenAt *int64, reinstallRequestedAt int64) error {
+	return reportReleaseInstallState(serverURL, releaseID, releaseInstallStatePayload{
+		Status:               status,
+		InstalledAt:          installedAt,
+		LastSeenAt:           lastSeenAt,
+		ReinstallRequestedAt: &reinstallRequestedAt,
+	})
+}
+
+func reportReleaseInstallState(serverURL, releaseID string, payload releaseInstallStatePayload) error {
+	status := payload.Status
 	if releaseID == "" {
 		return fmt.Errorf("release ID is required")
 	}
@@ -45,11 +66,6 @@ func ReportReleaseInstallState(serverURL, releaseID string, status ReleaseInstal
 	}
 
 	url := strings.TrimRight(serverURL, "/") + "/apps/release/" + releaseID + "/state"
-	payload := releaseInstallStatePayload{
-		Status:      status,
-		InstalledAt: installedAt,
-		LastSeenAt:  lastSeenAt,
-	}
 
 	res, err := utils.Patch(url, payload, map[string]string{
 		"Content-Type": "application/json",

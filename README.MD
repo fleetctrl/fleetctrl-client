@@ -13,7 +13,7 @@ Start menu.
 
 Build the client on 64-bit Windows 10 or Windows 11.
 
-- [Go 1.25 or later](https://go.dev/dl/)
+- [Go](https://go.dev/dl/) with the Go 1.26 toolchain for Wails v2.13.0
 - [Node.js 20 or later](https://nodejs.org/en/download)
 - Git
 - Microsoft Edge WebView2 Runtime
@@ -36,6 +36,7 @@ dotnet --version
 Run the following commands from the repository root:
 
 ```powershell
+$env:GOTOOLCHAIN = "go1.26.0"
 New-Item -ItemType Directory -Force .\bin | Out-Null
 
 go build -o .\bin\fleetctrl-client.exe .\cmd\main
@@ -54,6 +55,12 @@ Copy-Item .\cmd\ui\build\bin\fleetctrl-ui.exe `
 
 When building the UI, Wails automatically runs `npm install` and
 `npm run build` as configured in `cmd/ui/wails.json`.
+
+The `GOTOOLCHAIN` setting selects Go 1.26 for this PowerShell session and
+downloads it automatically if needed. Wails v2.13.0 bindings generation can
+fail with Go 1.27 with `package "context" without types`. Changing the `go`
+version in `go.mod` does not force an installed newer Go to use an older
+toolchain. The Make targets below select Go 1.26 automatically as well.
 
 The resulting files are:
 

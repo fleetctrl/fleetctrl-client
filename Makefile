@@ -1,4 +1,8 @@
 # Simple Makefile for the FleetCtrl client
+# Wails v2.13.0 cannot generate bindings with Go 1.27.
+# Export an exact toolchain so Wails subprocesses also use Go 1.26.
+build build-ui: export GOTOOLCHAIN := go1.26.0
+
 build:
 	@echo "Building..."
 	@mkdir -p bin

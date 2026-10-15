@@ -78,6 +78,8 @@ type AssignedApp struct {
 	Publisher   string            `json:"publisher"`
 	AutoUpdate  bool              `json:"auto_update"`
 	Releases    []AssignedRelease `json:"releases"`
+	// ReinstallRequestedAt is set when an administrator asked the hub to reinstall the app on this computer.
+	ReinstallRequestedAt *int64 `json:"reinstall_requested_at,omitempty"`
 }
 
 type AssignedAppsResponse struct {
