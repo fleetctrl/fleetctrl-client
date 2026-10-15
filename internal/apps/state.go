@@ -21,6 +21,8 @@ type releaseInstallStatePayload struct {
 	Status      ReleaseInstallStateStatus `json:"status"`
 	InstalledAt *int64                    `json:"installed_at,omitempty"`
 	LastSeenAt  *int64                    `json:"last_seen_at,omitempty"`
+	// Error describes why the release ended in the ERROR state; the hub shows it to administrators.
+	Error string `json:"error,omitempty"`
 	// ReinstallRequestedAt acknowledges the reinstall request with this timestamp so the hub can clear it.
 	ReinstallRequestedAt *int64 `json:"reinstall_requested_at,omitempty"`
 }
@@ -38,20 +40,22 @@ func (s ReleaseInstallStateStatus) IsValid() bool {
 	}
 }
 
-func ReportReleaseInstallState(serverURL, releaseID string, status ReleaseInstallStateStatus, installedAt, lastSeenAt *int64) error {
+func ReportReleaseInstallState(serverURL, releaseID string, status ReleaseInstallStateStatus, installedAt, lastSeenAt *int64, errorMessage string) error {
 	return reportReleaseInstallState(serverURL, releaseID, releaseInstallStatePayload{
 		Status:      status,
 		InstalledAt: installedAt,
 		LastSeenAt:  lastSeenAt,
+		Error:       errorMessage,
 	})
 }
 
 // ReportReinstallResult reports the outcome of a server-requested reinstall and acknowledges the request.
-func ReportReinstallResult(serverURL, releaseID string, status ReleaseInstallStateStatus, installedAt, lastSeenAt *int64, reinstallRequestedAt int64) error {
+func ReportReinstallResult(serverURL, releaseID string, status ReleaseInstallStateStatus, installedAt, lastSeenAt *int64, errorMessage string, reinstallRequestedAt int64) error {
 	return reportReleaseInstallState(serverURL, releaseID, releaseInstallStatePayload{
 		Status:               status,
 		InstalledAt:          installedAt,
 		LastSeenAt:           lastSeenAt,
+		Error:                errorMessage,
 		ReinstallRequestedAt: &reinstallRequestedAt,
 	})
 }

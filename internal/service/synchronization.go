@@ -160,8 +160,9 @@ func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, ass
 		checkedAt := time.Now().UTC()
 		if err != nil {
 			result.Errors++
-			_ = repo.UpdateDetectionState(ctx, state.ReleaseID, database.DetectionUnknown, checkedAt, summarizeError(err))
-			ms.reportReleaseInstallState(state.ReleaseID, apps.ReleaseInstallStateError, nil)
+			message := summarizeError(err)
+			_ = repo.UpdateDetectionState(ctx, state.ReleaseID, database.DetectionUnknown, checkedAt, message)
+			ms.reportReleaseInstallState(state.ReleaseID, apps.ReleaseInstallStateError, nil, "detection failed: "+message)
 			continue
 		}
 		status := database.DetectionNotInstalled
@@ -180,7 +181,7 @@ func (ms *MainService) refreshAssignedApplicationStates(ctx context.Context, ass
 		if failed[state.ReleaseID] {
 			continue
 		}
-		ms.reportReleaseInstallState(state.ReleaseID, reportStatus, nil)
+		ms.reportReleaseInstallState(state.ReleaseID, reportStatus, nil, "")
 	}
 
 	result.CompletedAt = time.Now().UTC()
@@ -271,10 +272,10 @@ func (ms *MainService) performInstall(ctx context.Context, app models.AssignedAp
 	}
 
 	if err := ms.installRelease(ctx, app, release, "reconcile"); err != nil {
-		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil)
+		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil, summarizeError(err))
 		return true
 	}
-	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateInstalled, nowUnixMilliPtr())
+	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateInstalled, nowUnixMilliPtr(), "")
 	return false
 }
 
@@ -284,18 +285,21 @@ func (ms *MainService) installRelease(ctx context.Context, app models.AssignedAp
 	now := time.Now().UTC()
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationInstalling, "")
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "install_started", Source: source, CreatedAt: now})
-	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateInstalling, nil)
+	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateInstalling, nil, "")
 	if err := ms.apps.Install(ctx, release, ms.serverURL); err != nil {
 		message := summarizeError(err)
 		_ = database.RecordAppFailure(release.ID)
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
 		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "install_failed", Source: source, Message: message, CreatedAt: time.Now().UTC()})
-		return err
+		return fmt.Errorf("install failed: %w", err)
 	}
 
 	installed, detectErr := ms.apps.IsInstalled(ctx, release, ms.serverURL)
 	if detectErr != nil || !installed {
-		message := "installation could not be verified"
+		message := "installation could not be verified: app was not detected after install"
+		if detectErr != nil {
+			message = "installation could not be verified: " + summarizeError(detectErr)
+		}
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
 		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "install_failed", Source: source, Message: message, CreatedAt: time.Now().UTC()})
 		return fmt.Errorf("%s", message)
@@ -337,12 +341,14 @@ func (ms *MainService) performReinstall(ctx context.Context, app models.Assigned
 	}
 	status := apps.ReleaseInstallStateInstalled
 	installedAt := nowUnixMilliPtr()
+	errorMessage := ""
 	if err := ms.installRelease(ctx, app, release, "reinstall"); err != nil {
 		status = apps.ReleaseInstallStateError
 		installedAt = nil
+		errorMessage = "reinstall: " + summarizeError(err)
 	}
 	lastSeenAt := time.Now().UnixMilli()
-	if err := apps.ReportReinstallResult(ms.serverURL, release.ID, status, installedAt, &lastSeenAt, requestedAt); err != nil {
+	if err := apps.ReportReinstallResult(ms.serverURL, release.ID, status, installedAt, &lastSeenAt, errorMessage, requestedAt); err != nil {
 		utils.Errorf("Failed to acknowledge reinstall of release %s: %v", release.ID, err)
 	}
 	return status == apps.ReleaseInstallStateError
@@ -363,13 +369,13 @@ func (ms *MainService) performUninstall(ctx context.Context, app models.Assigned
 		_ = database.RecordAppFailure(release.ID)
 		_ = repo.UpdateOperationState(ctx, release.ID, database.OperationError, message)
 		_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_failed", Source: "reconcile", Message: message, CreatedAt: time.Now().UTC()})
-		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil)
+		ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateError, nil, "uninstall failed: "+message)
 		return true
 	}
 	_ = database.ResetAppFailures(release.ID)
 	_ = repo.UpdateOperationState(ctx, release.ID, database.OperationIdle, "")
 	_ = repo.AppendAppEvent(ctx, database.AppEvent{ReleaseID: release.ID, AppID: app.ID, EventType: "uninstall_succeeded", Source: "reconcile", CreatedAt: time.Now().UTC()})
-	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateUninstalled, nil)
+	ms.reportReleaseInstallState(release.ID, apps.ReleaseInstallStateUninstalled, nil, "")
 	return false
 }
 

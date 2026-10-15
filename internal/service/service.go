@@ -175,13 +175,14 @@ func nowUnixMilliPtr() *int64 {
 	return &ts
 }
 
-func (ms *MainService) reportReleaseInstallState(releaseID string, status apps.ReleaseInstallStateStatus, installedAt *int64) {
+// reportReleaseInstallState sends the release state to the hub. errorMessage explains an ERROR state and is empty otherwise.
+func (ms *MainService) reportReleaseInstallState(releaseID string, status apps.ReleaseInstallStateStatus, installedAt *int64, errorMessage string) {
 	if releaseID == "" {
 		return
 	}
 
 	lastSeenAt := time.Now().UnixMilli()
-	if err := apps.ReportReleaseInstallState(ms.serverURL, releaseID, status, installedAt, &lastSeenAt); err != nil {
+	if err := apps.ReportReleaseInstallState(ms.serverURL, releaseID, status, installedAt, &lastSeenAt, errorMessage); err != nil {
 		utils.Errorf("Failed to report install state %s for release %s: %v", status, releaseID, err)
 	}
 }
