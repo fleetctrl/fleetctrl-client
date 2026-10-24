@@ -11,7 +11,10 @@ Start menu.
 
 ## Build Requirements
 
-Build the client on 64-bit Windows 10 or Windows 11.
+Build the client on 64-bit Windows 10 or Windows 11. Both EXE files can also be
+cross-compiled on Linux or macOS (see
+[Cross-Compiling on Linux or macOS](#cross-compiling-on-linux-or-macos)); the MSI
+package requires Windows.
 
 - [Go](https://go.dev/dl/) with the Go 1.26 toolchain for Wails v2.13.0
 - [Node.js 20 or later](https://nodejs.org/en/download)
@@ -77,11 +80,45 @@ If you use Git Bash, MSYS2, or another environment with GNU Make:
 make build
 ```
 
-To build only the desktop UI, run:
+To embed a specific version into the service, pass `VERSION`:
 
 ```bash
+make build VERSION=2.4.1
+```
+
+To build only the service or only the desktop UI, run:
+
+```bash
+make build-client
 make build-ui
 ```
+
+### Cross-Compiling on Linux or macOS
+
+The project does not use cgo, so both EXE files can be built on Linux or macOS
+without a C cross-compiler. Install Go, Node.js, and GNU Make, then run from the
+repository root:
+
+```bash
+make build
+```
+
+The Make targets build the service with `GOOS=windows GOARCH=amd64
+CGO_ENABLED=0` and the UI with Wails using `-platform windows/amd64`. To build
+the service manually:
+
+```bash
+GOTOOLCHAIN=go1.26.0 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+  go build -o bin/fleetctrl-client.exe ./cmd/main
+```
+
+Set `GOOS` and `GOARCH` only for this `go build` command. Do not export them for
+the Wails build, because `go run` would then also build the Wails CLI for
+Windows and it could not run on the build machine.
+
+The MSI package cannot be built this way, because WiX Toolset v4 runs only on
+Windows. Copy the EXE files to a Windows machine to create the MSI, or use the
+`Build and Release` GitHub Actions workflow.
 
 ## Creating the MSI Installer
 

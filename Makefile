@@ -1,14 +1,20 @@
 # Simple Makefile for the FleetCtrl client
 # Wails v2.13.0 cannot generate bindings with Go 1.27.
 # Export an exact toolchain so Wails subprocesses also use Go 1.26.
-build build-ui: export GOTOOLCHAIN := go1.26.0
+build build-client build-ui: export GOTOOLCHAIN := go1.26.0
 
-build:
+# Optional version embedded into the service, e.g. `make build VERSION=2.4.1`.
+VERSION ?=
+LDFLAGS := $(if $(VERSION),-X KiskaLE/RustDesk-ID/internal/const.Version=$(VERSION))
+
+build: build-client build-ui
+
+# GOOS/GOARCH are set only for this command so the build also works on Linux and macOS.
+# Exporting them for the whole target would also cross-compile the Wails CLI run below.
+build-client:
 	@echo "Building..."
 	@mkdir -p bin
-	@go build -o bin/fleetctrl-client.exe ./cmd/main
-	@cd cmd/ui && go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build -clean -platform windows/amd64 -webview2 download -o fleetctrl-ui.exe
-	@cp cmd/ui/build/bin/fleetctrl-ui.exe bin/fleetctrl-ui.exe
+	@GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/fleetctrl-client.exe ./cmd/main
 
 build-ui:
 	@mkdir -p bin
