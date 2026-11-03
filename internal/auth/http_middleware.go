@@ -2,9 +2,9 @@ package auth
 
 import (
 	consts "KiskaLE/RustDesk-ID/internal/const"
+	"KiskaLE/RustDesk-ID/internal/registry"
 	"KiskaLE/RustDesk-ID/internal/updater"
 	"KiskaLE/RustDesk-ID/internal/utils"
-	"KiskaLE/RustDesk-ID/internal/registry"
 	"context"
 	"encoding/json"
 	"errors"
@@ -319,10 +319,18 @@ func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Keep the runtime recovery path aligned with the startup recovery path.
+	// A stale local clock can make the DPoP proof invalid; syncing immediately
+	// before building the proof allows the client to recover without a service
+	// restart.
+	t.AS.syncServerSkew()
+
 	// Use shared skew tracking to avoid stale proofs.
 	iat := t.AS.currentDPoPIssuedAt()
-	if dpop, derr := CreateDPoPAt(http.MethodPost, recoverURL, "", iat); derr == nil {
+	if dpop, _, derr := CreateDPoPAtWithJTI(http.MethodPost, recoverURL, "", iat); derr == nil {
 		req.Header.Set("DPoP", dpop)
+	} else {
+		return derr
 	}
 
 	client := &http.Client{Transport: t.Base, Timeout: 30 * time.Second}
@@ -332,7 +340,11 @@ func (t *AuthTransport) RecoverLocked(ctx context.Context) error {
 	}
 	defer drainAndClose(res.Body)
 	if res.StatusCode != http.StatusOK {
-		return errors.New("POST chyba pri obnoveni tokenu pres recover")
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
+		if len(body) == 0 {
+			return fmt.Errorf("POST chyba pri obnoveni tokenu pres recover: status=%d", res.StatusCode)
+		}
+		return fmt.Errorf("POST chyba pri obnoveni tokenu pres recover: status=%d body=%q", res.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var payload struct {
