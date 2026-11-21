@@ -18,6 +18,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # Only a flag; the secrets themselves are exposed to the signing steps alone.
+      HAS_CODESIGN: ${{ secrets.CODESIGN_PFX_BASE64 != '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -107,6 +110,43 @@ jobs:
           Copy-Item ".\cmd\ui\build\bin\fleetctrl-ui.exe" ".\bin\fleetctrl-ui.exe" -Force
           Copy-Item ".\bin\fleetctrl-ui.exe" ".\bin\fleetctrl-ui-$version.exe" -Force
 
+      - name: Prepare code signing certificate
+        if: env.HAS_CODESIGN == 'true'
+        shell: pwsh
+        env:
+          CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CODESIGN_PFX_BASE64))
+          "CODESIGN_PFX_PATH=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # Public part only (no private key), published with the release for GPO import.
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $pfx, $env:CODESIGN_PFX_PASSWORD,
+            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+          try {
+            # .NET resolves relative paths against the process directory, so pass an absolute one.
+            $cer = Join-Path (Resolve-Path ".\bin").Path "fleetctrl-codesign.cer"
+            [IO.File]::WriteAllBytes($cer, $cert.Export("Cert"))
+            Write-Output "Code signing certificate $($cert.Subject), thumbprint $($cert.Thumbprint), valid until $($cert.NotAfter.ToString('yyyy-MM-dd'))"
+          } finally {
+            $cert.Dispose()
+          }
+
+      - name: Warn about unsigned build
+        if: env.HAS_CODESIGN != 'true'
+        shell: pwsh
+        run: Write-Output "::warning::CODESIGN_PFX_BASE64 secret is not set, EXE and MSI files will be unsigned."
+
+      # The EXE files must be signed before WiX packs them into the MSI.
+      - name: Sign executables
+        if: env.HAS_CODESIGN == 'true'
+        shell: pwsh
+        env:
+          CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
+        run: .\scripts\sign.ps1 .\bin\*.exe -PfxPath $env:CODESIGN_PFX_PATH
+
       - name: Install WiX Toolset v4
         shell: pwsh
         run: |
@@ -147,6 +187,18 @@ jobs:
             -arch x64 `
             -o "bin/fleetctrl-client-$version.msi"
 
+      - name: Sign MSI
+        if: env.HAS_CODESIGN == 'true'
+        shell: pwsh
+        env:
+          CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
+        run: .\scripts\sign.ps1 ".\bin\fleetctrl-client-${{ steps.extract_version.outputs.version }}.msi" -PfxPath $env:CODESIGN_PFX_PATH
+
+      - name: Remove code signing certificate
+        if: always() && env.HAS_CODESIGN == 'true'
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP "codesign.pfx")
+
       - name: Upload build artifacts
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
@@ -156,8 +208,10 @@ jobs:
             ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.exe
             ./bin/fleetctrl-ui-${{ steps.extract_version.outputs.version }}.exe
             ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.msi
+            ./bin/fleetctrl-codesign.cer
           if-no-files-found: error
 
+      # fleetctrl-codesign.cer exists only for signed builds; a missing file is just a warning.
       - name: Create GitHub Release and Upload Asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -165,11 +219,8 @@ jobs:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           files: |
-            ./bin/fleetctrl-client.exe
-            ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.exe
-            ./bin/fleetctrl-ui.exe
-            ./bin/fleetctrl-ui-${{ steps.extract_version.outputs.version }}.exe
             ./bin/fleetctrl-client-${{ steps.extract_version.outputs.version }}.msi
+            ./bin/fleetctrl-codesign.cer
           draft: true
           prerelease: false
           generate_release_notes: true
