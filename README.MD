@@ -148,6 +148,105 @@ wix build .\installer\installer.wxs `
 
 The resulting installer will be located at `bin\fleetctrl-client.msi`.
 
+## Code Signing
+
+Signing the EXE and MSI files with a certificate that is trusted on managed
+computers lets you allow FleetCtrl by publisher instead of by file hash or path.
+The project uses a self-signed code-signing certificate distributed through
+Group Policy.
+
+### Creating the Certificate
+
+Run once in PowerShell (no administrator rights needed):
+
+```powershell
+.\scripts\new-codesign-cert.ps1
+```
+
+The script prompts for a password and creates an RSA 4096 certificate valid for
+10 years (change it with `-ValidYears`, or the publisher name with
+`-Subject "CN=..."`):
+
+| File | Contents | Use |
+| --- | --- | --- |
+| `certs\fleetctrl-codesign.pfx` | certificate **with private key** | signing; keep secret and back it up |
+| `certs\fleetctrl-codesign.cer` | public certificate | distribute via GPO |
+
+The `certs` directory is ignored by Git. Anyone who has the PFX file and its
+password can sign files that your computers will trust, so store it in a
+password manager or vault, not on shared drives.
+
+### Signing a Local Build
+
+Sign the EXE files **before** building the MSI, then sign the MSI itself:
+
+```powershell
+.\scripts\sign.ps1 .\bin\fleetctrl-client.exe .\bin\fleetctrl-ui.exe
+
+wix build .\installer\installer.wxs ... -o .\bin\fleetctrl-client.msi
+
+.\scripts\sign.ps1 .\bin\fleetctrl-client.msi
+```
+
+The script reads the password from the `CODESIGN_PFX_PASSWORD` environment
+variable or prompts for it. Every signature is timestamped
+(`timestamp.digicert.com`), so files signed while the certificate was valid stay
+valid after it expires.
+
+On the build machine `Get-AuthenticodeSignature` reports `UnknownError` because
+it does not trust the certificate. On computers that received the certificate
+via GPO the status is `Valid`.
+
+### Signing in GitHub Actions
+
+The `Build and Release` workflow signs the EXE and MSI files when these
+repository secrets exist (otherwise it builds unsigned files and prints a
+warning):
+
+| Secret | Value |
+| --- | --- |
+| `CODESIGN_PFX_BASE64` | the PFX file encoded as Base64 |
+| `CODESIGN_PFX_PASSWORD` | the PFX password |
+
+```powershell
+gh secret set CODESIGN_PFX_BASE64 --body ([Convert]::ToBase64String([IO.File]::ReadAllBytes("certs\fleetctrl-codesign.pfx")))
+gh secret set CODESIGN_PFX_PASSWORD
+```
+
+A release contains the signed `fleetctrl-client-<version>.msi` and the public
+certificate `fleetctrl-codesign.cer`, which the workflow extracts from the PFX
+secret. The certificate is the same file you import via GPO; it contains no
+private key.
+
+### Distributing the Certificate via GPO
+
+In Group Policy Management, edit a GPO linked to the computers and open
+**Computer Configuration → Policies → Windows Settings → Security Settings →
+Public Key Policies**. Import `fleetctrl-codesign.cer` into both:
+
+- **Trusted Root Certification Authorities**, so that the signature is valid;
+- **Trusted Publishers**, so that the publisher is trusted.
+
+After `gpupdate /force` on a client, check a signed file:
+
+```powershell
+Get-AuthenticodeSignature "C:\Program Files\fleetctrl\client.exe" | Format-List Status, SignerCertificate
+```
+
+Then create the antivirus exclusion by certificate or publisher. Not every
+product supports that:
+
+- **Microsoft Defender for Endpoint**: Microsoft Defender portal → Settings →
+  Endpoints → Indicators → Certificates → add `fleetctrl-codesign.cer` with the
+  *Allow* action.
+- **Microsoft Defender Antivirus configured only via GPO** supports exclusions
+  by path, extension, and process only, not by certificate.
+- **Other antivirus products**: look for a trusted certificate or publisher
+  exclusion in their management console.
+
+Before the certificate expires, create a new one, add it to the GPO next to
+the old one, and update the GitHub secrets.
+
 ## Installation
 
 ### Recommended MSI Installation
