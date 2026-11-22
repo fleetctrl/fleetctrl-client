@@ -8,5 +8,10 @@
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "FleetCtrl"
+  },
+  "info": {
+    "companyName": "FleetCtrl",
+    "productName": "FleetCtrl",
+    "copyright": "Copyright © FleetCtrl"
   }
 }

@@ -9,11 +9,14 @@ LDFLAGS := $(if $(VERSION),-X KiskaLE/RustDesk-ID/internal/const.Version=$(VERSI
 
 build: build-client build-ui
 
-# GOOS/GOARCH are set only for this command so the build also works on Linux and macOS.
-# Exporting them for the whole target would also cross-compile the Wails CLI run below.
+# scripts/winres writes the version information, icon, and manifest of the EXE
+# (Version from internal/const/consts.go unless VERSION is set).
+# GOOS/GOARCH are set only for go build so the build also works on Linux and macOS.
+# Exporting them for the whole target would also cross-compile the tools run with go run.
 build-client:
 	@echo "Building..."
 	@mkdir -p bin
+	@go run ./scripts/winres $(if $(VERSION),-version $(VERSION))
 	@GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/fleetctrl-client.exe ./cmd/main
 
 build-ui:
