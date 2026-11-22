@@ -1,117 +1,88 @@
 package utils
 
 import (
-	"os/exec"
+	"errors"
+	"net"
 	"strings"
+
+	"github.com/StackExchange/wmi"
+	"golang.org/x/sys/windows"
 )
 
+// GetComputerName returns the NetBIOS name of the computer, the value of
+// %COMPUTERNAME%.
 func GetComputerName() (string, error) {
-	// get computer name
-	cmd := exec.Command("powershell", "-Command", "$env:computername")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	//trim white space
-	computerName := strings.TrimSpace(string(out))
-	return computerName, nil
+	return windows.ComputerName()
 }
 
+type win32OperatingSystem struct {
+	Caption     string
+	Version     string
+	SystemDrive string
+}
+
+func queryOperatingSystem() (win32OperatingSystem, error) {
+	var rows []win32OperatingSystem
+	if err := wmi.Query("SELECT Caption, Version, SystemDrive FROM Win32_OperatingSystem", &rows); err != nil {
+		return win32OperatingSystem{}, err
+	}
+	if len(rows) == 0 {
+		return win32OperatingSystem{}, errors.New("Win32_OperatingSystem returned no instance")
+	}
+	return rows[0], nil
+}
+
+// GetComputerOS returns the name of the Windows edition, such as
+// "Microsoft Windows 11 Pro".
 func GetComputerOS() (string, error) {
-	// get computer name
-	cmd := exec.Command("powershell", "-Command", "(Get-CimInstance Win32_OperatingSystem).Caption")
-	out, err := cmd.Output()
+	osInfo, err := queryOperatingSystem()
 	if err != nil {
 		return "", err
 	}
-	//trim white space
-	computerOS := strings.TrimSpace(string(out))
-
-	return computerOS, nil
+	return strings.TrimSpace(osInfo.Caption), nil
 }
 
+// GetComputerOSVersion returns the Windows version, such as "10.0.26200".
 func GetComputerOSVersion() (string, error) {
-	// get computer name
-	cmd := exec.Command("powershell", "-Command", "(Get-WmiObject Win32_OperatingSystem).Version")
-	out, err := cmd.Output()
+	osInfo, err := queryOperatingSystem()
 	if err != nil {
 		return "", err
 	}
-	//trim white space
-	computerOSVersion := strings.TrimSpace(string(out))
-
-	return computerOSVersion, nil
+	return strings.TrimSpace(osInfo.Version), nil
 }
 
+// GetComputerIP returns the first private IPv4 address (10.0.0.0/8,
+// 172.16.0.0/12 or 192.168.0.0/16) of a network adapter that is up, or an
+// empty string if there is none.
 func GetComputerIP() (string, error) {
-	// get private IPv4 address (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
-	cmd := exec.Command("powershell", "-Command", "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' -or $_.IPAddress -like '10.*' -or $_.IPAddress -match '^172\\.(1[6-9]|2[0-9]|3[01])\\.' }).IPAddress | Select-Object -First 1")
-	out, err := cmd.Output()
+	interfaces, err := net.Interfaces()
 	if err != nil {
 		return "", err
 	}
-	//trim white space
-	computerIP := strings.TrimSpace(string(out))
-
-	return computerIP, nil
-}
-
-func GetCurrentUser() (string, error) {
-	// Method 1: Try Win32_ComputerSystem (works for domain users)
-	cmd := exec.Command("powershell", "-Command", "(Get-CimInstance -ClassName Win32_ComputerSystem).Username")
-	out, err := cmd.Output()
-	if err == nil {
-		user := strings.TrimSpace(string(out))
-		if user != "" {
-			return user, nil
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		if ip := firstPrivateIPv4(addrs); ip != "" {
+			return ip, nil
 		}
 	}
-
-	// Method 2: Try quser.exe (query user) - works for local and domain users
-	cmd = exec.Command("powershell", "-Command", `
-$quserOutput = quser 2>$null
-if ($quserOutput) {
-    $lines = $quserOutput | Select-Object -Skip 1
-    foreach ($line in $lines) {
-        if ($line -match 'Active') {
-            $parts = $line.Trim() -split '\s+'
-            if ($parts.Count -gt 0) {
-                Write-Output $parts[0]
-                break
-            }
-        }
-    }
-}
-`)
-	out, err = cmd.Output()
-	if err == nil {
-		user := strings.TrimSpace(string(out))
-		if user != "" {
-			// Remove leading '>' if present
-			user = strings.TrimPrefix(user, ">")
-			return user, nil
-		}
-	}
-
-	// Method 3: Get owner of explorer.exe process (most reliable fallback)
-	cmd = exec.Command("powershell", "-Command", `
-$explorer = Get-WmiObject Win32_Process -Filter "Name='explorer.exe'" | Select-Object -First 1
-if ($explorer) {
-    $owner = $explorer.GetOwner()
-    if ($owner.Domain) {
-        Write-Output "$($owner.Domain)\$($owner.User)"
-    } else {
-        Write-Output $owner.User
-    }
-}
-`)
-	out, err = cmd.Output()
-	if err == nil {
-		user := strings.TrimSpace(string(out))
-		if user != "" {
-			return user, nil
-		}
-	}
-
 	return "", nil
+}
+
+func firstPrivateIPv4(addrs []net.Addr) string {
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip := ipNet.IP.To4(); ip != nil && ip.IsPrivate() {
+			return ip.String()
+		}
+	}
+	return ""
 }

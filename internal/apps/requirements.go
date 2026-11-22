@@ -3,6 +3,7 @@ package apps
 import (
 	"KiskaLE/RustDesk-ID/internal/models"
 	"KiskaLE/RustDesk-ID/internal/utils"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -111,7 +112,7 @@ func checkSingleRequirement(req models.ReleaseRequirement, serverURL string) (bo
 	} else {
 		// Run as currently logged in user
 		utils.Info("Running requirement script as current user")
-		output, err = runScriptAsUser(ctx, scriptPath, tempDir)
+		output, err = runScriptAsUser(ctx, scriptPath)
 	}
 
 	if err != nil {
@@ -157,97 +158,33 @@ func runScriptAsSystem(ctx context.Context, scriptPath, workDir string) ([]byte,
 	return cmd.Output()
 }
 
-// runScriptAsUser runs a PowerShell script as the currently logged in user
-func runScriptAsUser(ctx context.Context, scriptPath, workDir string) ([]byte, error) {
-	// Get the currently logged in user
-	currentUser, err := utils.GetCurrentUser()
-	if err != nil || currentUser == "" {
-		return nil, fmt.Errorf("failed to get current logged in user: %v", err)
-	}
-
-	utils.Infof("Running requirement script as user: %s", currentUser)
-
-	// Create a unique task name
-	taskName := fmt.Sprintf("FleetCtrl_Requirement_%d", time.Now().UnixNano())
-
-	// Create output file for capturing script result
-	outputFile := filepath.Join(workDir, fmt.Sprintf("requirement_output_%d.txt", time.Now().UnixNano()))
-	defer os.Remove(outputFile)
-
-	// Create a completion marker file
-	completionMarker := filepath.Join(workDir, fmt.Sprintf("requirement_done_%d.txt", time.Now().UnixNano()))
-	defer os.Remove(completionMarker)
-
-	// Wrap the script to capture output to a file and create completion marker
-	wrapperScript := fmt.Sprintf(`
-try {
-    $result = & '%s'
-    $result | Out-File -FilePath '%s' -Encoding UTF8 -NoNewline
-} catch {
-    "Error: $_" | Out-File -FilePath '%s' -Encoding UTF8 -NoNewline
-} finally {
-    "done" | Out-File -FilePath '%s' -Encoding UTF8 -NoNewline
-}
-`, strings.ReplaceAll(scriptPath, "'", "''"),
-		strings.ReplaceAll(outputFile, "'", "''"),
-		strings.ReplaceAll(outputFile, "'", "''"),
-		strings.ReplaceAll(completionMarker, "'", "''"))
-
-	wrapperPath := filepath.Join(workDir, fmt.Sprintf("wrapper_%d.ps1", time.Now().UnixNano()))
-	if err := os.WriteFile(wrapperPath, []byte(wrapperScript), 0644); err != nil {
-		return nil, fmt.Errorf("failed to create wrapper script: %v", err)
-	}
-	defer os.Remove(wrapperPath)
-
-	// Create scheduled task to run as the logged in user (hidden using conhost --headless)
-	createTaskScript := fmt.Sprintf(`
-$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%s"' -WorkingDirectory '%s'
-$principal = New-ScheduledTaskPrincipal -UserId '%s' -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden
-Register-ScheduledTask -TaskName '%s' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-Start-ScheduledTask -TaskName '%s'
-`, wrapperPath, workDir, currentUser, taskName, taskName)
-
-	// Create and start the scheduled task
-	createCmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", createTaskScript)
-	createOutput, err := createCmd.CombinedOutput()
+// runScriptAsUser runs a PowerShell script as the user working at the
+// computer and returns its standard output. The script stays in the service's
+// temp directory, which the user cannot open, so the user gets read access to
+// the script file alone.
+func runScriptAsUser(ctx context.Context, scriptPath string) ([]byte, error) {
+	session, err := utils.OpenUserSession()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create scheduled task: %v, output: %s", err, string(createOutput))
+		return nil, fmt.Errorf("failed to open session of logged on user: %v", err)
+	}
+	defer session.Close()
+	utils.Infof("Running requirement script as user %s (session %d)", session.User, session.ID)
+
+	if err := session.GrantRead(scriptPath); err != nil {
+		return nil, fmt.Errorf("failed to give the user access to the script: %v", err)
 	}
 
-	// Ensure task is cleaned up
-	defer func() {
-		cleanupCmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-			fmt.Sprintf("Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue", taskName))
-		cleanupCmd.Run()
-	}()
-
-	// Wait for completion marker file to appear (indicates script finished)
-	timeout := time.After(60 * time.Second)
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("context cancelled while waiting for script completion")
-		case <-timeout:
-			return nil, fmt.Errorf("timeout waiting for requirement script to complete")
-		case <-ticker.C:
-			// Check if completion marker exists
-			if _, err := os.Stat(completionMarker); err == nil {
-				// Small delay to ensure output file is fully written
-				time.Sleep(100 * time.Millisecond)
-
-				// Read output from file
-				output, err := os.ReadFile(outputFile)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read script output: %v", err)
-				}
-
-				utils.Infof("User context script completed, output file content: %s", string(output))
-				return output, nil
-			}
+	var stdout, stderr bytes.Buffer
+	args := []string{utils.PowerShellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath}
+	exitCode, err := session.Run(ctx, args, &stdout, &stderr)
+	if err != nil {
+		return nil, err
+	}
+	if exitCode != 0 {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("exit status %d: %s", exitCode, msg)
 		}
+		return nil, fmt.Errorf("exit status %d", exitCode)
 	}
+	return stdout.Bytes(), nil
 }

@@ -42,6 +42,7 @@ Run the following commands from the repository root:
 $env:GOTOOLCHAIN = "go1.26.0"
 New-Item -ItemType Directory -Force .\bin | Out-Null
 
+go run ./scripts/winres
 go build -o .\bin\fleetctrl-client.exe .\cmd\main
 
 Push-Location .\cmd\ui
@@ -58,6 +59,16 @@ Copy-Item .\cmd\ui\build\bin\fleetctrl-ui.exe `
 
 When building the UI, Wails automatically runs `npm install` and
 `npm run build` as configured in `cmd/ui/wails.json`.
+
+`go run ./scripts/winres` writes `cmd\main\rsrc_windows_amd64.syso` with the
+version information, icon, and manifest of the service, and `go build` links it
+into the EXE. Windows shows the version information in the file properties, and
+antivirus and application control rules (AppLocker, WDAC) can match it. The
+version comes from `internal/const/consts.go`; pass `-version 2.4.1` to override
+it. The `.syso` file is generated, so Git ignores it. The desktop UI takes its
+version information from the `info` section of `cmd/ui/wails.json`. The
+`Build and Release` workflow sets `productVersion` there to the release version,
+and local builds show the Wails default 1.0.0.
 
 The `GOTOOLCHAIN` setting selects Go 1.26 for this PowerShell session and
 downloads it automatically if needed. Wails v2.13.0 bindings generation can
@@ -80,7 +91,8 @@ If you use Git Bash, MSYS2, or another environment with GNU Make:
 make build
 ```
 
-To embed a specific version into the service, pass `VERSION`:
+To embed a specific version into the service and its file properties, pass
+`VERSION`:
 
 ```bash
 make build VERSION=2.4.1
@@ -108,13 +120,14 @@ CGO_ENABLED=0` and the UI with Wails using `-platform windows/amd64`. To build
 the service manually:
 
 ```bash
+GOTOOLCHAIN=go1.26.0 go run ./scripts/winres
 GOTOOLCHAIN=go1.26.0 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   go build -o bin/fleetctrl-client.exe ./cmd/main
 ```
 
 Set `GOOS` and `GOARCH` only for this `go build` command. Do not export them for
-the Wails build, because `go run` would then also build the Wails CLI for
-Windows and it could not run on the build machine.
+`go run ./scripts/winres` or the Wails build, because `go run` would then build
+those tools for Windows and they could not run on the build machine.
 
 The MSI package cannot be built this way, because WiX Toolset v4 runs only on
 Windows. Copy the EXE files to a Windows machine to create the MSI, or use the

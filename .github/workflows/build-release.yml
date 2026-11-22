@@ -89,12 +89,22 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "bin" | Out-Null
           $version = "${{ steps.extract_version.outputs.version }}"
+          # Version information, icon, and manifest of the EXE (cmd/main/rsrc_windows_amd64.syso).
+          go run ./scripts/winres -version $version
+          if ($LASTEXITCODE -ne 0) { throw "Generating the Windows resources of the service failed" }
           go build -ldflags "-X KiskaLE/RustDesk-ID/internal/const.Version=$version" -o ".\bin\fleetctrl-client.exe" ".\cmd\main\"
           Copy-Item ".\bin\fleetctrl-client.exe" ".\bin\fleetctrl-client-$version.exe" -Force
 
       - name: Build desktop UI (Windows)
         shell: pwsh
         run: |
+          # Version shown in the file properties of fleetctrl-ui.exe; Wails reads it from wails.json.
+          $wailsJson = (Resolve-Path ".\cmd\ui\wails.json").Path
+          $wailsConfig = Get-Content $wailsJson -Raw -Encoding UTF8 | ConvertFrom-Json
+          $wailsConfig.info | Add-Member -NotePropertyName productVersion -NotePropertyValue "${{ steps.extract_version.outputs.version }}" -Force
+          # UTF-8 without BOM, which the Go JSON decoder in Wails requires.
+          [IO.File]::WriteAllText($wailsJson, ($wailsConfig | ConvertTo-Json -Depth 10))
+
           Push-Location ".\cmd\ui"
           try {
             go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build `
