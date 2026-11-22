@@ -1,6 +1,69 @@
 package updater
 
-import "testing"
+import (
+	consts "KiskaLE/RustDesk-ID/internal/const"
+	"net/http"
+	"testing"
+)
+
+func TestCompareVersions(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"2.5.0", "2.5.0", 0},
+		{"2.5", "2.5.0", 0},
+		{"2.5.1", "2.5.0", 1},
+		{"2.10.0", "2.9.0", 1},
+		{"2.4.9", "2.5.0", -1},
+		{" 2.5.0 ", "2.5.0", 0},
+		// A prerelease is older than its release but newer than the previous release.
+		{"2.5.0", "2.5.0-rc", 1},
+		{"2.5.0-rc", "2.5.0", -1},
+		{"2.5.0-rc", "2.4.9", 1},
+		{"2.5.1-rc", "2.5.0", 1},
+		{"2.5.0-rc", "2.5.0-rc", 0},
+		// Prereleases among themselves, as in Semantic Versioning.
+		{"2.5.0-rc", "2.5.0-rc.1", -1},
+		{"2.5.0-rc.1", "2.5.0-rc.2", -1},
+		{"2.5.0-rc.10", "2.5.0-rc.2", 1},
+		{"2.5.0-alpha", "2.5.0-beta", -1},
+		{"2.5.0-beta", "2.5.0-rc", -1},
+		{"2.5.0-1", "2.5.0-alpha", -1},
+		{"2.5.0-beta-2", "2.5.0-beta-10", 1},
+	}
+	for _, tt := range tests {
+		if got := compareVersions(tt.a, tt.b); got != tt.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+		if got := compareVersions(tt.b, tt.a); got != -tt.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tt.b, tt.a, got, -tt.want)
+		}
+	}
+}
+
+func TestCheckUpdateHeader(t *testing.T) {
+	tests := []struct {
+		current, advertised string
+		wantUpdate          bool
+	}{
+		{"2.5.0-rc", "2.5.0", true},
+		{"2.5.0-rc", "2.5.0-rc.1", true},
+		{"2.4.0", "2.5.0", true},
+		{"2.5.0", "2.5.0", false},
+		{"2.5.0", "2.5.0-rc", false},
+		{"2.5.0", "2.4.0", false},
+	}
+	defer func(v string) { consts.Version = v }(consts.Version)
+	for _, tt := range tests {
+		consts.Version = tt.current
+		resp := &http.Response{Header: http.Header{}}
+		resp.Header.Set("X-Client-Update", `{"version":"`+tt.advertised+`","id":"abc","hash":"00"}`)
+		if got := CheckUpdateHeader(resp) != nil; got != tt.wantUpdate {
+			t.Errorf("current %s, advertised %s: update = %v, want %v", tt.current, tt.advertised, got, tt.wantUpdate)
+		}
+	}
+}
 
 func TestGetInstallerExtension(t *testing.T) {
 	tests := []struct {

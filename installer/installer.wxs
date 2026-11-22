@@ -26,7 +26,29 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
     InstallerVersion="500"
     Scope="perMachine">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of FleetCtrl Client is already installed." />
+    <!-- A prerelease (2.5.0-rc) and its release (2.5.0) share the ProductVersion, because it
+         holds numbers only. AllowSameVersionUpgrades makes the release replace the prerelease
+         instead of being installed next to it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="A newer version of FleetCtrl Client is already installed." />
+
+    <!-- Windows Installer compares only the first three numbers of ProductVersion, so
+         AllowSameVersionUpgrades would also let 2.5.0-rc replace 2.5.0, or 2.5.0.1 replace
+         2.5.0.2. The release workflow passes UpgradeRank, a fixed-width string that orders the
+         full versions (see build-release.yml); the package stores it in the registry and refuses
+         to replace a package with a higher one. Builds without UpgradeRank skip the check. -->
+    <?ifdef UpgradeRank?>
+    <Property Id="INSTALLED_UPGRADE_RANK" Secure="yes">
+      <RegistrySearch Id="InstalledUpgradeRankSearch"
+        Root="HKLM"
+        Key="SOFTWARE\fleetctrl\client"
+        Name="msi_upgrade_rank"
+        Type="raw"
+        Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR NOT INSTALLED_UPGRADE_RANK OR INSTALLED_UPGRADE_RANK &lt;= &quot;$(var.UpgradeRank)&quot;"
+      Message="A newer version of FleetCtrl Client is already installed." />
+    <?endif?>
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Fresh silent installs must provide configuration; interactive installs collect it
@@ -107,6 +129,16 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
       <ComponentRef Id="ClientExeComp" />
       <ComponentRef Id="UIExeComp" />
       <ComponentRef Id="StartMenuShortcutComp" />
+      <?ifdef UpgradeRank?>
+      <Component Id="UpgradeRankComp" Directory="INSTALLDIR" Guid="0f3c6b7e-9a1d-4f52-8e64-3b2d7c91a5e0" Bitness="always64">
+        <RegistryValue Root="HKLM"
+          Key="SOFTWARE\fleetctrl\client"
+          Name="msi_upgrade_rank"
+          Type="string"
+          Value="$(var.UpgradeRank)"
+          KeyPath="yes" />
+      </Component>
+      <?endif?>
     </Feature>
 
     <!-- ══════════════════════════════════════════════════════════

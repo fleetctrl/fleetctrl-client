@@ -5,6 +5,7 @@ import (
 	"KiskaLE/RustDesk-ID/internal/utils"
 	"bufio"
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -302,17 +303,23 @@ func msiexecCmdLine(msiPath, logPath string) string {
 	return fmt.Sprintf(`msiexec /i "%s" /qn /norestart /l*v "%s"`, msiPath, logPath)
 }
 
-// compareVersions compares dotted numeric version strings.
-// Returns -1 if a < b, 0 if equal (ignoring prerelease suffixes), 1 if a > b.
+// compareVersions compares versions such as 2.5.0 and 2.5.0-rc.1.
+// Returns -1 if a < b, 0 if equal, 1 if a > b. The dotted numbers decide
+// first; when they are equal, a prerelease (2.5.0-rc) is older than its
+// release (2.5.0), so clients installed from a prerelease update to it.
 func compareVersions(a, b string) int {
-	numericPart := func(v string) string {
-		if i := strings.IndexByte(v, '-'); i >= 0 {
-			return v[:i]
-		}
-		return v
+	aNum, aPre, _ := strings.Cut(strings.TrimSpace(a), "-")
+	bNum, bPre, _ := strings.Cut(strings.TrimSpace(b), "-")
+	if c := compareNumericVersions(aNum, bNum); c != 0 {
+		return c
 	}
-	as := strings.Split(numericPart(strings.TrimSpace(a)), ".")
-	bs := strings.Split(numericPart(strings.TrimSpace(b)), ".")
+	return comparePrereleases(aPre, bPre)
+}
+
+// compareNumericVersions compares dotted numbers; a missing part counts as 0.
+func compareNumericVersions(a, b string) int {
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
 	for i := 0; i < len(as) || i < len(bs); i++ {
 		var av, bv int
 		if i < len(as) {
@@ -321,14 +328,47 @@ func compareVersions(a, b string) int {
 		if i < len(bs) {
 			bv, _ = strconv.Atoi(bs[i])
 		}
-		if av != bv {
-			if av < bv {
-				return -1
-			}
-			return 1
+		if c := cmp.Compare(av, bv); c != 0 {
+			return c
 		}
 	}
 	return 0
+}
+
+// comparePrereleases orders prerelease suffixes as Semantic Versioning does:
+// no suffix is newer than any suffix, dot-separated identifiers are compared
+// in turn (numbers numerically and below text, text in ASCII order), and when
+// one list of identifiers is a prefix of the other, the shorter one is older.
+func comparePrereleases(a, b string) int {
+	switch {
+	case a == b:
+		return 0
+	case a == "":
+		return 1
+	case b == "":
+		return -1
+	}
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		an, aErr := strconv.Atoi(as[i])
+		bn, bErr := strconv.Atoi(bs[i])
+		var c int
+		switch {
+		case aErr == nil && bErr == nil:
+			c = cmp.Compare(an, bn)
+		case aErr == nil:
+			c = -1
+		case bErr == nil:
+			c = 1
+		default:
+			c = strings.Compare(as[i], bs[i])
+		}
+		if c != 0 {
+			return c
+		}
+	}
+	return cmp.Compare(len(as), len(bs))
 }
 
 // IsUpdatePath returns true if the path is an update-related endpoint
