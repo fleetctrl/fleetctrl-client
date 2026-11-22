@@ -3,13 +3,13 @@ package apps
 import (
 	"KiskaLE/RustDesk-ID/internal/models"
 	"KiskaLE/RustDesk-ID/internal/utils"
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -160,15 +160,19 @@ func downloadReleaseScript(script models.ReleaseScript, serverURL string) (strin
 	return localPath, tempDir, cleanup, nil
 }
 
-func executePowerShellScriptAsSystem(ctx context.Context, scriptPath, workDir string) (scriptExecutionResult, error) {
-	psArgs := []string{
+// powerShellScriptArgs runs the script and exits with its exit code. A
+// terminating error in the script makes PowerShell exit with code 1.
+func powerShellScriptArgs(scriptPath string) []string {
+	return []string{
 		"-NoProfile",
 		"-NonInteractive",
 		"-ExecutionPolicy", "Bypass",
 		"-Command", fmt.Sprintf("$ErrorActionPreference='Stop'; & '%s'; if ($LASTEXITCODE -ne $null) { exit [int]$LASTEXITCODE }", strings.ReplaceAll(scriptPath, "'", "''")),
 	}
+}
 
-	cmd := exec.CommandContext(ctx, "powershell.exe", psArgs...)
+func executePowerShellScriptAsSystem(ctx context.Context, scriptPath, workDir string) (scriptExecutionResult, error) {
+	cmd := exec.CommandContext(ctx, "powershell.exe", powerShellScriptArgs(scriptPath)...)
 	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -187,101 +191,27 @@ func executePowerShellScriptAsSystem(ctx context.Context, scriptPath, workDir st
 	}, nil
 }
 
+// executePowerShellScriptAsUser runs the script as the user working at the
+// computer. The script stays in the service's temp directory, which the user
+// cannot open, so the user gets read access to the script file alone, and the
+// script starts in the user's profile directory instead of workDir.
 func executePowerShellScriptAsUser(ctx context.Context, scriptPath, workDir string) (scriptExecutionResult, error) {
-	currentUser, err := utils.GetCurrentUser()
-	if err != nil || currentUser == "" {
-		return scriptExecutionResult{}, fmt.Errorf("failed to get current logged in user: %v", err)
-	}
-
-	taskName := fmt.Sprintf("FleetCtrl_InstallScript_%d", time.Now().UnixNano())
-	outputFile := filepath.Join(workDir, fmt.Sprintf("install_script_output_%d.txt", time.Now().UnixNano()))
-	exitCodeFile := filepath.Join(workDir, fmt.Sprintf("install_script_exit_%d.txt", time.Now().UnixNano()))
-	completionMarker := filepath.Join(workDir, fmt.Sprintf("install_script_done_%d.txt", time.Now().UnixNano()))
-	defer os.Remove(outputFile)
-	defer os.Remove(exitCodeFile)
-	defer os.Remove(completionMarker)
-
-	wrapperScript := fmt.Sprintf(`
-$exitCode = 0
-$ErrorActionPreference = 'Stop'
-try {
-    $output = & '%s' *>&1
-    $output | Out-File -FilePath '%s' -Encoding UTF8
-    if ($LASTEXITCODE -ne $null) {
-        $exitCode = [int]$LASTEXITCODE
-    }
-} catch {
-    $_ | Out-File -FilePath '%s' -Encoding UTF8
-    $exitCode = 1
-} finally {
-    $exitCode | Out-File -FilePath '%s' -Encoding ASCII -NoNewline
-    "done" | Out-File -FilePath '%s' -Encoding ASCII -NoNewline
-}
-exit $exitCode
-`, strings.ReplaceAll(scriptPath, "'", "''"),
-		strings.ReplaceAll(outputFile, "'", "''"),
-		strings.ReplaceAll(outputFile, "'", "''"),
-		strings.ReplaceAll(exitCodeFile, "'", "''"),
-		strings.ReplaceAll(completionMarker, "'", "''"))
-
-	wrapperPath := filepath.Join(workDir, fmt.Sprintf("install_script_wrapper_%d.ps1", time.Now().UnixNano()))
-	if err := os.WriteFile(wrapperPath, []byte(wrapperScript), 0644); err != nil {
-		return scriptExecutionResult{}, fmt.Errorf("failed to create wrapper script: %v", err)
-	}
-	defer os.Remove(wrapperPath)
-
-	createTaskScript := fmt.Sprintf(`
-$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s"' -WorkingDirectory '%s'
-$principal = New-ScheduledTaskPrincipal -UserId '%s' -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden
-Register-ScheduledTask -TaskName '%s' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-Start-ScheduledTask -TaskName '%s'
-`, wrapperPath, workDir, currentUser, taskName, taskName)
-
-	createCmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", createTaskScript)
-	createOutput, err := createCmd.CombinedOutput()
+	session, err := utils.OpenUserSession()
 	if err != nil {
-		return scriptExecutionResult{}, fmt.Errorf("failed to create scheduled task: %v, output: %s", err, string(createOutput))
+		return scriptExecutionResult{}, fmt.Errorf("failed to open session of logged on user: %v", err)
+	}
+	defer session.Close()
+	utils.Infof("Running install script as user %s (session %d)", session.User, session.ID)
+
+	if err := session.GrantRead(scriptPath); err != nil {
+		return scriptExecutionResult{}, fmt.Errorf("failed to give the user access to the script: %v", err)
 	}
 
-	defer func() {
-		cleanupCmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-			fmt.Sprintf("Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue", taskName))
-		cleanupCmd.Run()
-	}()
-
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return scriptExecutionResult{}, ctx.Err()
-		case <-ticker.C:
-			if _, err := os.Stat(completionMarker); err == nil {
-				time.Sleep(100 * time.Millisecond)
-
-				output, readErr := os.ReadFile(outputFile)
-				if readErr != nil && !os.IsNotExist(readErr) {
-					return scriptExecutionResult{}, fmt.Errorf("failed to read script output: %v", readErr)
-				}
-
-				exitCodeRaw, readErr := os.ReadFile(exitCodeFile)
-				if readErr != nil {
-					return scriptExecutionResult{}, fmt.Errorf("failed to read script exit code: %v", readErr)
-				}
-
-				exitCodeValue := strings.TrimSpace(string(exitCodeRaw))
-				exitCode, parseErr := strconv.Atoi(exitCodeValue)
-				if parseErr != nil {
-					return scriptExecutionResult{}, fmt.Errorf("failed to parse script exit code %q: %v", exitCodeValue, parseErr)
-				}
-
-				return scriptExecutionResult{
-					Output:   output,
-					ExitCode: exitCode,
-				}, nil
-			}
-		}
+	var output bytes.Buffer
+	args := append([]string{utils.PowerShellPath()}, powerShellScriptArgs(scriptPath)...)
+	exitCode, err := session.Run(ctx, args, &output, &output)
+	if err != nil {
+		return scriptExecutionResult{Output: output.Bytes()}, err
 	}
+	return scriptExecutionResult{Output: output.Bytes(), ExitCode: exitCode}, nil
 }
