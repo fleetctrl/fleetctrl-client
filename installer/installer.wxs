@@ -26,7 +26,11 @@ Version=1.0.0 -o bin/fleetctrl-client.msi -arch x64
     InstallerVersion="500"
     Scope="perMachine">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of FleetCtrl Client is already installed." />
+    <!-- A prerelease (2.5.0-rc) and its release (2.5.0) share the ProductVersion, because it
+         holds numbers only. AllowSameVersionUpgrades makes the release replace the prerelease
+         instead of being installed next to it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="A newer version of FleetCtrl Client is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Fresh silent installs must provide configuration; interactive installs collect it
