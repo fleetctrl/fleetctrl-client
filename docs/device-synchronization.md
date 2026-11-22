@@ -6,7 +6,7 @@ Requires the Hub version providing `POST /computer/heartbeat` and `PATCH /comput
 - Inventory: on startup, then every hour through the existing coordinator. Manual device/full synchronization still works. Failed hardware collection leaves the previous server inventory untouched and records a failed sync.
 - Applications: existing 15-minute reconciliation schedule remains in place.
 
-Windows CIM supplies CPU names, total physical cores and logical processors across all CPUs, installed RAM, and the Windows system volume's name, capacity and free bytes. The volume is read from `Win32_OperatingSystem.SystemDrive`, so it is not assumed to be C:. Collection is bounded to 45 seconds and uses the installed PowerShell without extra runtime dependencies.
+Windows CIM supplies CPU names, total physical cores and logical processors across all CPUs, installed RAM, and the Windows system volume's name, capacity and free bytes. The volume is read from `Win32_OperatingSystem.SystemDrive`, so it is not assumed to be C:. Collection is bounded to 45 seconds. The service queries WMI directly, without starting PowerShell, and reads the computer name, IP address, and logged-on user through Windows APIs.
 
 The Hub uses server time for presence and inventory timestamps. Offline status is shown after five minutes without a check-in.
 
@@ -14,7 +14,8 @@ Validation:
 
 ```powershell
 go test ./internal/... ./cmd/main/...
-# Optional smoke test against the current Windows machine:
+# Optional smoke test against the current Windows machine; it also compares
+# the values with the PowerShell commands the client used before:
 $env:FLEETCTRL_TEST_HARDWARE = '1'
-go test ./internal/utils -run Hardware -v
+go test ./internal/utils -run 'Hardware|ComputerInfo' -v
 ```

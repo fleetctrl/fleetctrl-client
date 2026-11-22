@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
@@ -148,17 +147,9 @@ func checkDetectionRule(rule models.DetectionRule) (bool, error) {
 			if value == "" {
 				return false, fmt.Errorf("file version check: missing 'value' in config")
 			}
-			// Read file version via LiteralPath and environment variable to avoid script injection.
-			cmd := exec.Command("powershell", "-NoProfile", "-Command",
-				`(Get-Item -LiteralPath $env:FLEETCTRL_DETECTION_PATH).VersionInfo.FileVersion`)
-			cmd.Env = append(os.Environ(), "FLEETCTRL_DETECTION_PATH="+path)
-			output, err := cmd.Output()
-			if err != nil {
+			fileVersion, err := utils.GetFileVersion(path)
+			if err != nil || fileVersion == "" {
 				return false, nil // File doesn't exist or has no version
-			}
-			fileVersion := strings.TrimSpace(string(output))
-			if fileVersion == "" {
-				return false, nil
 			}
 			cmp := CompareVersions(fileVersion, value)
 

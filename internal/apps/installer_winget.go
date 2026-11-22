@@ -203,25 +203,23 @@ func (wi *wingetInstaller) MarkUpdateChecked() error {
 // waitForWingetLock waits for any existing winget process to complete.
 // If the process doesn't complete within the timeout, it will be killed.
 func waitForWingetLock(timeout time.Duration) {
-	checkScript := `Get-Process -Name winget -ErrorAction SilentlyContinue | Select-Object -First 1`
-	killScript := `Get-Process -Name winget -ErrorAction SilentlyContinue | Stop-Process -Force`
-
 	startTime := time.Now()
 	for {
-		// Check if winget is running
-		cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", checkScript)
-		output, _ := cmd.Output()
-
-		if len(strings.TrimSpace(string(output))) == 0 {
-			// No winget process running
+		running, err := utils.IsProcessRunning("winget.exe")
+		if err != nil {
+			utils.Errorf("Failed to check for a running winget process: %v", err)
+			return
+		}
+		if !running {
 			return
 		}
 
 		// Check timeout
 		if time.Since(startTime) >= timeout {
 			utils.Info("Winget process didn't complete in time, killing it...")
-			killCmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", killScript)
-			killCmd.Run()
+			if err := utils.KillProcesses("winget.exe"); err != nil {
+				utils.Errorf("Failed to kill winget: %v", err)
+			}
 			time.Sleep(1 * time.Second) // Wait a bit for the process to be killed
 			return
 		}
